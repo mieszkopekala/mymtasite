@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTA Live</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0b0c0f;
+      --surface: #141519;
+      --surface2: #1c1e25;
+      --surface3: #24262f;
+      --border: #2a2c38;
+      --text: #f0f1f5;
+      --text-secondary: #7c7f91;
+      --text-dim: #4a4d5f;
+      --good: #1db954;
+      --delay: #f5a623;
+      --planned: #3a8ef6;
+      --suspended: #e8384f;
+      --header-h: 60px;
+      --panel-w: 380px;
+      --sidebar-w: 260px;
+    }
+
+    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Barlow', sans-serif; }
+
+    /* ── SIDEBAR ── */
+    .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200; opacity: 0; pointer-events: none; transition: opacity .3s; }
+    .sidebar-overlay.open { opacity: 1; pointer-events: all; }
+
+    .sidebar {
+      position: fixed; top: 0; left: 0; height: 100%; width: var(--sidebar-w);
+      background: var(--surface); border-right: 1px solid var(--border);
+      z-index: 201; transform: translateX(-100%);
+      transition: transform .35s cubic-bezier(.4,0,.2,1);
+      display: flex; flex-direction: column;
+    }
+    .sidebar.open { transform: translateX(0); }
+
+    .sidebar-header {
+      height: var(--header-h); display: flex; align-items: center;
+      padding: 0 20px; border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .sidebar-logo { font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 22px; color: var(--text); letter-spacing: -0.5px; }
+    .sidebar-logo span { color: #1671C4; }
+
+    .sidebar-nav { flex: 1; padding: 12px 0; }
+    .sidebar-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 20px; cursor: pointer; color: var(--text-secondary);
+      font-size: 15px; font-weight: 500; transition: all .2s;
+      border-left: 3px solid transparent;
+    }
+    .sidebar-item:hover { background: var(--surface2); color: var(--text); border-left-color: #1671C4; }
+    .sidebar-item svg { flex-shrink: 0; opacity: .7; }
+    .sidebar-item:hover svg { opacity: 1; }
+
+    .sidebar-footer { padding: 16px 20px; border-top: 1px solid var(--border); }
+    .sidebar-version { font-size: 11px; color: var(--text-dim); font-family: 'Barlow Condensed', sans-serif; letter-spacing: 1px; text-transform: uppercase; }
+
+    /* ── HEADER ── */
+    header {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--header-h);
+      background: rgba(11,12,15,.95); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border); z-index: 100;
+      display: flex; align-items: center; padding: 0 16px; gap: 16px;
+    }
+
+    .hamburger {
+      width: 36px; height: 36px; display: flex; flex-direction: column;
+      justify-content: center; align-items: center; gap: 5px; cursor: pointer;
+      border-radius: 8px; transition: background .2s; flex-shrink: 0;
+    }
+    .hamburger:hover { background: var(--surface2); }
+    .hamburger span { display: block; width: 18px; height: 1.5px; background: var(--text); transition: all .3s; border-radius: 2px; }
+
+    .logo { font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 24px; letter-spacing: -0.5px; flex-shrink: 0; }
+    .logo .mta { color: #1671C4; }
+    .logo .live { color: var(--text); }
+    .logo .dot { display: inline-block; width: 7px; height: 7px; background: var(--suspended); border-radius: 50%; margin-left: 4px; animation: pulse 2s infinite; }
+
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.8)} }
+
+    .tab-nav { display: flex; align-items: center; gap: 2px; flex: 1; }
+    .tab-btn {
+      font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+      font-size: 14px; letter-spacing: 1.5px; text-transform: uppercase;
+      padding: 7px 14px; border-radius: 6px; cursor: pointer;
+      color: var(--text-secondary); background: transparent; border: none;
+      transition: all .2s; position: relative;
+    }
+    .tab-btn:hover { color: var(--text); background: var(--surface2); }
+    .tab-btn.active { color: var(--text); background: var(--surface2); }
+    .tab-btn.active::after {
+      content: ''; position: absolute; bottom: -1px; left: 14px; right: 14px;
+      height: 2px; background: #1671C4; border-radius: 2px 2px 0 0;
+    }
+
+    .header-time { margin-left: auto; font-family: 'Barlow Condensed', sans-serif; font-size: 13px; color: var(--text-dim); letter-spacing: .5px; flex-shrink: 0; }
+
+    /* ── MAIN ── */
+    main { margin-top: var(--header-h); height: calc(100% - var(--header-h)); overflow-y: auto; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── SUBWAY HERO ── */
+    .subway-hero {
+      position: relative; height: 160px; overflow: hidden;
+      background: linear-gradient(135deg, #0b0c0f 0%, #0e1520 50%, #0b0c0f 100%);
+      display: flex; align-items: center; padding: 0 32px;
+    }
+    .hero-grid {
+      position: absolute; inset: 0; opacity: .06;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    .hero-lines {
+      position: absolute; inset: 0; overflow: hidden;
+    }
+    .hero-line {
+      position: absolute; height: 3px; border-radius: 3px; opacity: .15;
+    }
+    .hero-content { position: relative; z-index: 1; }
+    .hero-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 52px; line-height: .9; letter-spacing: -2px; color: var(--text); }
+    .hero-title span { color: #1671C4; }
+    .hero-subtitle { font-family: 'Barlow Condensed', sans-serif; font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--text-dim); margin-top: 8px; }
+    .hero-stats { position: absolute; right: 32px; top: 50%; transform: translateY(-50%); display: flex; gap: 24px; z-index: 1; }
+    .hero-stat { text-align: center; }
+    .hero-stat-num { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 36px; line-height: 1; color: var(--text); }
+    .hero-stat-label { font-family: 'Barlow Condensed', sans-serif; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); margin-top: 3px; }
+
+    /* ── SERVICE STATUS GROUPS ── */
+    .subway-body { padding: 0 24px 40px; }
+
+    .status-group { margin-bottom: 8px; }
+    .status-group-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px 0 10px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .status-dot.good { background: var(--good); box-shadow: 0 0 8px var(--good); }
+    .status-dot.delay { background: var(--delay); box-shadow: 0 0 8px var(--delay); }
+    .status-dot.planned { background: var(--planned); box-shadow: 0 0 8px var(--planned); }
+    .status-dot.suspended { background: var(--suspended); box-shadow: 0 0 8px var(--suspended); }
+
+    .status-label { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+    .status-label.good { color: var(--good); }
+    .status-label.delay { color: var(--delay); }
+    .status-label.planned { color: var(--planned); }
+    .status-label.suspended { color: var(--suspended); }
+
+    .status-count { font-family: 'Barlow Condensed', sans-serif; font-size: 12px; color: var(--text-dim); margin-left: auto; }
+    .chevron { margin-left: 8px; color: var(--text-dim); transition: transform .25s; font-size: 14px; }
+    .status-group.collapsed .chevron { transform: rotate(-90deg); }
+
+    .bullets-row {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      padding: 14px 0; overflow: hidden;
+      transition: max-height .3s ease, padding .3s;
+    }
+    .status-group.collapsed .bullets-row { max-height: 0; padding-top: 0; padding-bottom: 0; }
+
+    /* ── BULLET ── */
+    .bullet {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Barlow Condensed', sans-serif; font-weight: 900;
+      font-size: 20px; cursor: pointer; flex-shrink: 0;
+      transition: transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .2s;
+      position: relative; user-select: none;
+    }
+    .bullet:hover {
+      transform: scale(1.18);
+    }
+    .bullet.good:hover { box-shadow: 0 0 20px rgba(29,185,84,.35); }
+    .bullet.delay:hover { box-shadow: 0 0 20px rgba(245,166,35,.35); }
+    .bullet.planned:hover { box-shadow: 0 0 20px rgba(58,142,246,.35); }
+    .bullet.suspended:hover { box-shadow: 0 0 20px rgba(232,56,79,.45); }
+    .bullet.suspended { opacity: .65; }
+    .bullet:active { transform: scale(1.05); }
+
+    /* ── RIGHT PANEL ── */
+    .panel-backdrop { position: fixed; inset: 0; z-index: 150; pointer-events: none; }
+    .panel-backdrop.open { pointer-events: all; }
+
+    .line-panel {
+      position: fixed; top: var(--header-h); right: 0; bottom: 0;
+      width: var(--panel-w); background: var(--surface);
+      border-left: 1px solid var(--border);
+      z-index: 151; transform: translateX(100%);
+      transition: transform .35s cubic-bezier(.4,0,.2,1);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .line-panel.open { transform: translateX(0); }
+
+    .panel-header {
+      padding: 0 20px; height: 64px; display: flex; align-items: center;
+      gap: 14px; flex-shrink: 0; border-bottom: 1px solid var(--border);
+    }
+    .panel-bullet { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 24px; flex-shrink: 0; }
+    .panel-line-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 22px; flex: 1; }
+    .panel-close { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); border-radius: 6px; transition: all .2s; font-size: 20px; }
+    .panel-close:hover { background: var(--surface2); color: var(--text); }
+
+    .panel-status-bar {
+      padding: 12px 20px; display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0; border-bottom: 1px solid var(--border);
+    }
+    .panel-status-icon { font-size: 16px; }
+    .panel-status-text { font-size: 14px; font-weight: 500; }
+    .panel-status-bar.good { background: rgba(29,185,84,.08); }
+    .panel-status-bar.delay { background: rgba(245,166,35,.08); }
+    .panel-status-bar.planned { background: rgba(58,142,246,.08); }
+    .panel-status-bar.suspended { background: rgba(232,56,79,.08); }
+
+    .panel-direction-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .dir-tab { flex: 1; padding: 12px; text-align: center; font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; transition: all .2s; }
+    .dir-tab.active { color: var(--text); border-bottom-color: #1671C4; }
+
+    .station-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+    .station-item {
+      display: flex; align-items: center; padding: 13px 20px; cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,.04); transition: background .15s;
+      gap: 12px;
+    }
+    .station-item:hover { background: var(--surface2); }
+    .station-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid; flex-shrink: 0; }
+    .station-dot.transfer { background: var(--text); border-color: var(--text); }
+    .station-name { font-size: 14px; color: var(--text); font-weight: 500; flex: 1; }
+    .station-transfers { display: flex; gap: 4px; }
+    .transfer-badge { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Barlow Condensed', sans-serif; font-size: 10px; font-weight: 900; }
+    .station-arrow { color: var(--text-dim); font-size: 12px; }
+
+    /* ── ARRIVALS OVERLAY ── */
+    .arrivals-overlay {
+      position: fixed; inset: 0; z-index: 160;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+      display: flex; align-items: flex-end; justify-content: flex-end;
+      opacity: 0; pointer-events: none; transition: opacity .3s;
+    }
+    .arrivals-overlay.open { opacity: 1; pointer-events: all; }
+
+    .arrivals-sheet {
+      position: absolute; top: var(--header-h); right: 0; bottom: 0;
+      width: calc(var(--panel-w) + 320px); max-width: 100%;
+      background: var(--surface); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      transform: translateX(100%); transition: transform .35s cubic-bezier(.4,0,.2,1);
+    }
+    .arrivals-overlay.open .arrivals-sheet { transform: translateX(0); }
+
+    .arrivals-header {
+      padding: 20px 24px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+      display: flex; align-items: flex-start; gap: 14px;
+    }
+    .arrivals-back { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); border-radius: 8px; transition: all .2s; margin-top: 2px; }
+    .arrivals-back:hover { background: var(--surface2); color: var(--text); }
+    .arrivals-station-info { flex: 1; }
+    .arrivals-station-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 26px; line-height: 1.1; }
+    .arrivals-station-line { font-size: 13px; color: var(--text-dim); margin-top: 3px; }
+
+    .arrivals-dir-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .arrivals-dir-tab { flex: 1; padding: 12px; text-align: center; font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; transition: all .2s; }
+    .arrivals-dir-tab.active { color: var(--text); border-bottom-color: #1671C4; }
+
+    .arrivals-body { flex: 1; overflow-y: auto; padding: 16px 24px; }
+
+    .train-arrival {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .train-arrival:last-child { border-bottom: none; }
+    .train-arrival-bullet { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 17px; flex-shrink: 0; }
+    .train-arrival-dest { flex: 1; }
+    .train-arrival-dest-name { font-size: 15px; font-weight: 600; }
+    .train-arrival-dest-via { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .train-arrival-time { text-align: right; }
+    .train-arrival-mins { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 28px; line-height: 1; }
+    .train-arrival-mins.now { color: var(--good); font-size: 20px; letter-spacing: 1px; }
+    .train-arrival-mins-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+
+    .arrivals-loading { display: flex; align-items: center; justify-content: center; height: 120px; gap: 12px; }
+    .spinner { width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: var(--text); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .no-arrivals { text-align: center; padding: 40px 20px; }
+    .no-arrivals-icon { font-size: 32px; margin-bottom: 12px; }
+    .no-arrivals-text { font-size: 14px; color: var(--text-dim); }
+
+    /* ── BUS / RAIL PLACEHOLDERS ── */
+    .placeholder-tab { display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - var(--header-h)); gap: 16px; opacity: .4; }
+    .placeholder-icon { font-size: 56px; }
+    .placeholder-title { font-family: 'Barlow Condensed', sans-serif; font-size: 28px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+    .placeholder-sub { font-size: 14px; color: var(--text-dim); }
+
+    /* ── SETTINGS PANEL ── */
+    .settings-page { padding: 24px; max-width: 500px; }
+    .settings-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 28px; margin-bottom: 4px; }
+    .settings-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 28px; }
+    .settings-group { margin-bottom: 24px; }
+    .settings-group-label { font-family: 'Barlow Condensed', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+    .settings-field { display: flex; flex-direction: column; gap: 6px; }
+    .settings-field label { font-size: 13px; color: var(--text-secondary); }
+    .settings-field input {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 14px; color: var(--text);
+      font-size: 14px; font-family: 'Barlow', sans-serif;
+      transition: border-color .2s; outline: none;
+    }
+    .settings-field input:focus { border-color: #1671C4; }
+    .settings-save {
+      background: #1671C4; color: #fff; border: none; border-radius: 8px;
+      padding: 10px 20px; font-family: 'Barlow Condensed', sans-serif;
+      font-size: 15px; font-weight: 700; letter-spacing: 1px; cursor: pointer;
+      transition: background .2s;
+    }
+    .settings-save:hover { background: #1a82e0; }
+    .settings-info { font-size: 12px; color: var(--text-dim); margin-top: 8px; line-height: 1.6; }
+
+    /* ── ROSTER PAGE ── */
+    .roster-page { padding: 24px; }
+    .roster-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 28px; margin-bottom: 4px; }
+    .roster-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 24px; }
+    .roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .roster-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: flex; align-items: center; gap: 12px; }
+    .roster-avatar { width: 42px; height: 42px; border-radius: 50%; background: var(--surface3); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+    .roster-name { font-weight: 600; font-size: 14px; }
+    .roster-role { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .roster-empty { padding: 40px; text-align: center; color: var(--text-dim); font-size: 14px; }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* ── MOBILE ── */
+    @media (max-width: 640px) {
+      :root { --panel-w: 100vw; }
+      .hero-stats { display: none; }
+      .tab-btn { font-size: 12px; padding: 7px 10px; letter-spacing: 1px; }
+      .subway-body { padding: 0 16px 40px; }
+      .bullet { width: 40px; height: 40px; font-size: 18px; }
+      .arrivals-sheet { width: 100%; }
+      .logo { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Sidebar Overlay -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo"><span>MTA</span> LIVE</div>
+  </div>
+  <div class="sidebar-nav">
+    <div class="sidebar-item" onclick="openPage('roster')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Roster
+    </div>
+    <div class="sidebar-item" onclick="openPage('settings')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </div>
+  </div>
+  <div class="sidebar-footer">
+    <div class="sidebar-version">MTA LIVE · v1.0</div>
+  </div>
+</nav>
+
+<!-- Header -->
+<header>
+  <div class="hamburger" onclick="toggleSidebar()">
+    <span></span><span></span><span></span>
+  </div>
+  <div class="logo"><span class="mta">MTA</span><span class="live"> LIVE</span><span class="dot"></span></div>
+  <nav class="tab-nav">
+    <button class="tab-btn active" onclick="setTab('subway')">Subway</button>
+    <button class="tab-btn" onclick="setTab('bus')">Bus</button>
+    <button class="tab-btn" onclick="setTab('rail')">Rail</button>
+  </nav>
+  <div class="header-time" id="headerTime"></div>
+</header>
+
+<!-- Main -->
+<main id="mainContent">
+
+  <!-- SUBWAY TAB -->
+  <div class="tab-content active" id="tab-subway">
+    <!-- Hero -->
+    <div class="subway-hero">
+      <div class="hero-grid"></div>
+      <div class="hero-lines" id="heroLines"></div>
+      <div class="hero-content">
+        <div class="hero-title">NEW YORK<br><span>SUBWAY</span></div>
+        <div class="hero-subtitle">Real-Time Service Status</div>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <div class="hero-stat-num" id="statGood">—</div>
+          <div class="hero-stat-label">Good<br>Service</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-num" style="color:var(--delay)" id="statDelay">—</div>
+          <div class="hero-stat-label">Delays</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-num" style="color:var(--planned)" id="statPlanned">—</div>
+          <div class="hero-stat-label">Planned<br>Work</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Groups -->
+    <div class="subway-body" id="statusGroups"></div>
+  </div>
+
+  <!-- BUS TAB -->
+  <div class="tab-content" id="tab-bus">
+    <div class="placeholder-tab">
+      <div class="placeholder-icon">🚌</div>
+      <div class="placeholder-title">Bus</div>
+      <div class="placeholder-sub">Coming soon</div>
+    </div>
+  </div>
+
+  <!-- RAIL TAB -->
+  <div class="tab-content" id="tab-rail">
+    <div class="placeholder-tab">
+      <div class="placeholder-icon">🚆</div>
+      <div class="placeholder-title">Railroad</div>
+      <div class="placeholder-sub">Coming soon</div>
+    </div>
+  </div>
+
+  <!-- ROSTER PAGE -->
+  <div class="tab-content" id="tab-roster">
+    <div class="roster-page">
+      <div class="roster-title">Roster</div>
+      <div class="roster-sub">Team members with app access</div>
+      <div class="roster-empty">No roster members yet. Add team members in Settings.</div>
+    </div>
+  </div>
+
+  <!-- SETTINGS PAGE -->
+  <div class="tab-content" id="tab-settings">
+    <div class="settings-page">
+      <div class="settings-title">Settings</div>
+      <div class="settings-sub">Configure your MTA Live app</div>
+      <div class="settings-group">
+        <div class="settings-group-label">API Configuration</div>
+        <div class="settings-field">
+          <label>MTA API Key</label>
+          <input type="password" id="apiKeyInput" placeholder="Paste your MTA API key" />
+        </div>
+        <div class="settings-info">
+          Get your key at <strong>api.mta.info</strong>. Required for live arrivals.<br>
+          For real-time GTFS feeds, also deploy the Netlify proxy function included in this project.
+        </div>
+      </div>
+      <button class="settings-save" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+</main>
+
+<!-- Line Panel (slides from right) -->
+<div class="panel-backdrop" id="panelBackdrop" onclick="closePanelOnBackdrop(event)">
+  <div class="line-panel" id="linePanel">
+    <div class="panel-header" id="panelHeader"></div>
+    <div class="panel-status-bar" id="panelStatusBar"></div>
+    <div class="panel-direction-tabs">
+      <div class="dir-tab active" onclick="setPanelDir('uptown')" id="dirTabUptown">Uptown / Bronx</div>
+      <div class="dir-tab" onclick="setPanelDir('downtown')" id="dirTabDowntown">Downtown / Brooklyn</div>
+    </div>
+    <div class="station-list" id="stationList"></div>
+  </div>
+</div>
+
+<!-- Arrivals Overlay -->
+<div class="arrivals-overlay" id="arrivalsOverlay" onclick="closeArrivalsOnBackdrop(event)">
+  <div class="arrivals-sheet" id="arrivalsSheet">
+    <div class="arrivals-header">
+      <div class="arrivals-back" onclick="closeArrivals()">←</div>
+      <div class="arrivals-station-info">
+        <div class="arrivals-station-name" id="arrivalsStationName"></div>
+        <div class="arrivals-station-line" id="arrivalsStationLine"></div>
+      </div>
+    </div>
+    <div class="arrivals-dir-tabs">
+      <div class="arrivals-dir-tab active" onclick="setArrivalsDir('uptown')" id="arrDirUptown">Uptown / Bronx</div>
+      <div class="arrivals-dir-tab" onclick="setArrivalsDir('downtown')" id="arrDirDowntown">Downtown / Brooklyn</div>
+    </div>
+    <div class="arrivals-body" id="arrivalsBody"></div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────────
+const LINES = {
+  '1': { label:'1', color:'#EE352E', text:'#fff', name:'Broadway-7th Ave Local' },
+  '2': { label:'2', color:'#EE352E', text:'#fff', name:'7th Ave Express' },
+  '3': { label:'3', color:'#EE352E', text:'#fff', name:'7th Ave Express' },
+  '4': { label:'4', color:'00933C', color:'#00933C', text:'#fff', name:'Lexington Ave Express' },
+  '5': { label:'5', color:'#00933C', text:'#fff', name:'Lexington Ave Express' },
+  '6': { label:'6', color:'#00933C', text:'#fff', name:'Lexington Ave Local' },
+  '7': { label:'7', color:'#B933AD', text:'#fff', name:'Flushing Local/Express' },
+  'A': { label:'A', color:'#0039A6', text:'#fff', name:'8th Ave Express' },
+  'C': { label:'C', color:'#0039A6', text:'#fff', name:'8th Ave Local' },
+  'E': { label:'E', color:'#0039A6', text:'#fff', name:'8th Ave Local' },
+  'B': { label:'B', color:'#FF6319', text:'#fff', name:'6th Ave Express' },
+  'D': { label:'D', color:'#FF6319', text:'#fff', name:'6th Ave Express' },
+  'F': { label:'F', color:'#FF6319', text:'#fff', name:'6th Ave Local' },
+  'M': { label:'M', color:'#FF6319', text:'#fff', name:'6th Ave Local' },
+  'G': { label:'G', color:'#6CBE45', text:'#fff', name:'Crosstown Local' },
+  'J': { label:'J', color:'#996633', text:'#fff', name:'Nassau St Express' },
+  'Z': { label:'Z', color:'#996633', text:'#fff', name:'Nassau St Express' },
+  'L': { label:'L', color:'#A7A9AC', text:'#000', name:'14th St-Canarsie Local' },
+  'N': { label:'N', color:'#FCCC0A', text:'#1a1200', name:'Broadway Express' },
+  'Q': { label:'Q', color:'#FCCC0A', text:'#1a1200', name:'2nd Ave/Broadway Express' },
+  'R': { label:'R', color:'#FCCC0A', text:'#1a1200', name:'Broadway Local' },
+  'W': { label:'W', color:'#FCCC0A', text:'#1a1200', name:'Broadway Local' },
+  'S': { label:'S', color:'#808183', text:'#fff', name:'42nd St Shuttle' },
+  'SIR': { label:'SI', color:'#1D6EC4', text:'#fff', name:'Staten Island Railway' },
+};
+
+const STATIONS = {
+  '1': [
+    { id:'101N', name:'Van Cortlandt Park–242 St', transfers:[] },
+    { id:'103N', name:'238 St', transfers:[] },
+    { id:'104N', name:'231 St', transfers:[] },
+    { id:'106N', name:'Marble Hill–225 St', transfers:[] },
+    { id:'107N', name:'215 St', transfers:[] },
+    { id:'108N', name:'207 St', transfers:[] },
+    { id:'109N', name:'Dyckman St', transfers:[] },
+    { id:'110N', name:'191 St', transfers:[] },
+    { id:'111N', name:'181 St', transfers:[] },
+    { id:'112N', name:'168 St–Washington Hts', transfers:['A','C'] },
+    { id:'113N', name:'157 St', transfers:[] },
+    { id:'114N', name:'145 St', transfers:[] },
+    { id:'115N', name:'137 St–City College', transfers:[] },
+    { id:'116N', name:'125 St', transfers:[] },
+    { id:'117N', name:'116 St–Columbia University', transfers:[] },
+    { id:'118N', name:'Cathedral Pkwy–110 St', transfers:[] },
+    { id:'119N', name:'103 St', transfers:[] },
+    { id:'120N', name:'96 St', transfers:[] },
+    { id:'121N', name:'86 St', transfers:[] },
+    { id:'122N', name:'79 St', transfers:[] },
+    { id:'123N', name:'72 St', transfers:[] },
+    { id:'124N', name:'66 St–Lincoln Center', transfers:[] },
+    { id:'125N', name:'59 St–Columbus Circle', transfers:['A','B','C','D'] },
+    { id:'126N', name:'50 St', transfers:[] },
+    { id:'127N', name:'Times Sq–42 St', transfers:['2','3','7','N','Q','R','W','S','A','C','E'] },
+    { id:'128N', name:'34 St–Penn Station', transfers:['2','3','A','C','E'] },
+    { id:'129N', name:'28 St', transfers:[] },
+    { id:'130N', name:'23 St', transfers:[] },
+    { id:'131N', name:'18 St', transfers:[] },
+    { id:'132N', name:'14 St', transfers:['F','M','L'] },
+    { id:'133N', name:'Christopher St–Sheridan Sq', transfers:[] },
+    { id:'134N', name:'Houston St', transfers:[] },
+    { id:'135N', name:'Canal St', transfers:['2','3','A','C','E'] },
+    { id:'136N', name:'Franklin St', transfers:[] },
+    { id:'137N', name:'Chambers St', transfers:['2','3'] },
+    { id:'138N', name:'Cortlandt St–WTC', transfers:['R','W','E'] },
+    { id:'139N', name:'Rector St', transfers:[] },
+    { id:'142N', name:'South Ferry', transfers:[] },
+  ],
+  '4': [
+    { id:'401N', name:'Woodlawn', transfers:[] },
+    { id:'402N', name:'Mosholu Pkwy', transfers:[] },
+    { id:'405N', name:'Bedford Park Blvd–Lehman', transfers:[] },
+    { id:'406N', name:'Kingsbridge Rd', transfers:[] },
+    { id:'407N', name:'Fordham Rd', transfers:[] },
+    { id:'408N', name:'183 St', transfers:[] },
+    { id:'409N', name:'Burnside Ave', transfers:[] },
+    { id:'410N', name:'176 St', transfers:[] },
+    { id:'411N', name:'Mt Eden Ave', transfers:[] },
+    { id:'412N', name:'170 St', transfers:[] },
+    { id:'413N', name:'167 St', transfers:[] },
+    { id:'414N', name:'161 St–Yankee Stadium', transfers:['B','D'] },
+    { id:'415N', name:'149 St–Grand Concourse', transfers:[] },
+    { id:'416N', name:'138 St–Grand Concourse', transfers:[] },
+    { id:'418N', name:'125 St', transfers:[] },
+    { id:'419N', name:'86 St', transfers:[] },
+    { id:'420N', name:'59 St', transfers:['N','R','W'] },
+    { id:'621N', name:'51 St', transfers:[] },
+    { id:'422N', name:'Grand Central–42 St', transfers:['5','6','7','S'] },
+    { id:'423N', name:'33 St', transfers:[] },
+    { id:'424N', name:'28 St', transfers:[] },
+    { id:'425N', name:'23 St', transfers:[] },
+    { id:'626N', name:'14 St–Union Sq', transfers:['L','N','Q','R','W'] },
+    { id:'427N', name:'Brooklyn Bridge–City Hall', transfers:['J','Z'] },
+    { id:'621S', name:'Fulton St', transfers:['A','C','J','Z','2','3'] },
+    { id:'629N', name:'Wall St', transfers:[] },
+    { id:'630N', name:'Bowling Green', transfers:[] },
+    { id:'631N', name:'Borough Hall', transfers:['2','3','R'] },
+    { id:'632N', name:'Nevins St', transfers:[] },
+    { id:'633N', name:'Atlantic Ave–Barclays Ctr', transfers:['2','3','B','D','N','Q','R'] },
+    { id:'635N', name:'Franklin Ave', transfers:['S'] },
+    { id:'636N', name:'Nostrand Ave', transfers:[] },
+    { id:'637N', name:'Crown Hts–Utica Ave', transfers:[] },
+    { id:'638N', name:'Sutter Ave–Rutland Rd', transfers:[] },
+    { id:'639N', name:'Saratoga Ave', transfers:[] },
+    { id:'640N', name:'Junius St', transfers:[] },
+    { id:'241N', name:'Pennsylvania Ave', transfers:[] },
+    { id:'242N', name:'Van Siclen Ave', transfers:[] },
+    { id:'243N', name:'New Lots Ave', transfers:[] },
+  ],
+  'L': [
+    { id:'L01N', name:'8 Ave', transfers:['A','C','E'] },
+    { id:'L02N', name:'6 Ave', transfers:['F','M','1','2','3'] },
+    { id:'L03N', name:'Union Sq–14 St', transfers:['4','5','6','N','Q','R','W'] },
+    { id:'L05N', name:'3 Ave', transfers:[] },
+    { id:'L06N', name:'1 Ave', transfers:[] },
+    { id:'L07N', name:'Bedford Ave', transfers:[] },
+    { id:'L08N', name:'Lorimer St', transfers:[] },
+    { id:'L10N', name:'Montrose Ave', transfers:[] },
+    { id:'L11N', name:'Grand St', transfers:[] },
+    { id:'L12N', name:'Morgan Ave', transfers:[] },
+    { id:'L13N', name:'Jefferson St', transfers:[] },
+    { id:'L14N', name:'DeKalb Ave', transfers:[] },
+    { id:'L15N', name:'Myrtle-Wyckoff Aves', transfers:['M'] },
+    { id:'L16N', name:'Halsey St', transfers:[] },
+    { id:'L17N', name:'Wilson Ave', transfers:[] },
+    { id:'L18N', name:'Bushwick Ave–Aberdeen St', transfers:[] },
+    { id:'L19N', name:'Broadway Junction', transfers:['A','C','J','Z'] },
+    { id:'L20N', name:'Atlantic Ave', transfers:[] },
+    { id:'L21N', name:'Sutter Ave', transfers:[] },
+    { id:'L22N', name:'Livonia Ave', transfers:[] },
+    { id:'L24N', name:'New Lots Ave', transfers:[] },
+    { id:'L25N', name:'East 105 St', transfers:[] },
+    { id:'L26N', name:'Canarsie–Rockaway Pkwy', transfers:[] },
+  ],
+  'A': [
+    { id:'A02N', name:'Inwood–207 St', transfers:[] },
+    { id:'A03N', name:'Dyckman St', transfers:[] },
+    { id:'A04N', name:'190 St', transfers:[] },
+    { id:'A05N', name:'181 St', transfers:[] },
+    { id:'A06N', name:'175 St', transfers:[] },
+    { id:'A07N', name:'168 St–Washington Hts', transfers:['1','C'] },
+    { id:'A09N', name:'145 St', transfers:[] },
+    { id:'A10N', name:'135 St', transfers:[] },
+    { id:'A11N', name:'125 St', transfers:['B','C','D'] },
+    { id:'A12N', name:'116 St', transfers:[] },
+    { id:'A14N', name:'59 St–Columbus Circle', transfers:['1','B','C','D'] },
+    { id:'A15N', name:'50 St', transfers:[] },
+    { id:'A16N', name:'42 St–Port Authority', transfers:['E','C'] },
+    { id:'A17N', name:'34 St–Penn Station', transfers:['1','2','3'] },
+    { id:'A18N', name:'23 St', transfers:[] },
+    { id:'A19N', name:'14 St–8 Ave', transfers:['L'] },
+    { id:'A20N', name:'W 4 St–Wash Sq', transfers:['B','D','E','F','M'] },
+    { id:'A21N', name:'Spring St', transfers:[] },
+    { id:'A22N', name:'Canal St', transfers:['1','2','3'] },
+    { id:'A23N', name:'Chambers St', transfers:['J','Z'] },
+    { id:'A24N', name:'Fulton St', transfers:['J','Z','2','3','4','5'] },
+    { id:'A25N', name:'High St–Brooklyn Bridge', transfers:[] },
+    { id:'A27N', name:'Jay St–MetroTech', transfers:['F','R'] },
+    { id:'A28N', name:'DeKalb Ave', transfers:['B','Q','R'] },
+    { id:'A32N', name:'Nostrand Ave', transfers:[] },
+    { id:'A34N', name:'Utica Ave', transfers:[] },
+    { id:'A38N', name:'Far Rockaway–Mott Ave', transfers:[] },
+  ],
+  'N': [
+    { id:'N02N', name:'Astoria–Ditmars Blvd', transfers:[] },
+    { id:'N03N', name:'Astoria Blvd', transfers:[] },
+    { id:'N04N', name:'30 Ave', transfers:[] },
+    { id:'N05N', name:'Broadway', transfers:[] },
+    { id:'N06N', name:'36 Ave', transfers:[] },
+    { id:'N07N', name:'39 Ave', transfers:[] },
+    { id:'N08N', name:'Queensboro Plaza', transfers:['7'] },
+    { id:'N09N', name:'Queens Plaza', transfers:['E','F','M','R'] },
+    { id:'Q05N', name:'Lexington Ave–59 St', transfers:['4','5','6','R','W'] },
+    { id:'R15N', name:'57 St–7 Ave', transfers:['F'] },
+    { id:'R16N', name:'49 St', transfers:[] },
+    { id:'R17N', name:'Times Sq–42 St', transfers:['1','2','3','7','A','C','E','S'] },
+    { id:'R18N', name:'34 St–Herald Sq', transfers:['B','D','F','M'] },
+    { id:'R19N', name:'28 St', transfers:[] },
+    { id:'R20N', name:'23 St', transfers:[] },
+    { id:'R21N', name:'Union Sq–14 St', transfers:['4','5','6','L'] },
+    { id:'R22N', name:'8 St–NYU', transfers:[] },
+    { id:'R23N', name:'Prince St', transfers:['6'] },
+    { id:'R24N', name:'Canal St', transfers:['J','Z','6'] },
+    { id:'R25N', name:'City Hall', transfers:[] },
+    { id:'R26N', name:'Cortlandt St', transfers:['1'] },
+    { id:'R27N', name:'Rector St', transfers:[] },
+    { id:'R28N', name:'Whitehall St–South Ferry', transfers:['1'] },
+    { id:'R29N', name:'Court St–Borough Hall', transfers:['4','5'] },
+    { id:'R30N', name:'Jay St–MetroTech', transfers:['A','C','F'] },
+    { id:'R31N', name:'DeKalb Ave', transfers:['B','Q'] },
+    { id:'R32N', name:'Pacific St', transfers:['B','D','2','3','4','5'] },
+    { id:'R33N', name:'Union St', transfers:[] },
+    { id:'R34N', name:'4 Ave–9 St', transfers:['F','G'] },
+    { id:'R35N', name:'59 St', transfers:['D'] },
+    { id:'R36N', name:'Bay Ridge Ave', transfers:[] },
+    { id:'R41N', name:'Bay Ridge–95 St', transfers:[] },
+  ],
+};
+
+// Extracted first so DEFAULT_STATIONS can reference them without self-referencing
+const B_STATIONS = [
+    { id:'B08N', name:'Bedford Park Blvd', transfers:[] },
+    { id:'B10N', name:'Kingsbridge Rd', transfers:[] },
+    { id:'B12N', name:'Fordham Rd', transfers:[] },
+    { id:'B13N', name:'182-183 Sts', transfers:[] },
+    { id:'B14N', name:'Tremont Ave', transfers:[] },
+    { id:'B15N', name:'174-175 Sts', transfers:[] },
+    { id:'B16N', name:'170 St', transfers:[] },
+    { id:'B17N', name:'167 St', transfers:[] },
+    { id:'B18N', name:'161 St–Yankee Stadium', transfers:['4'] },
+    { id:'B19N', name:'155 St', transfers:[] },
+    { id:'B20N', name:'145 St', transfers:[] },
+    { id:'B21N', name:'135 St', transfers:[] },
+    { id:'B22N', name:'125 St', transfers:['A','C'] },
+    { id:'B23N', name:'116 St', transfers:[] },
+    { id:'B24N', name:'110 St–Central Park North', transfers:[] },
+    { id:'B25N', name:'Cathedral Pkwy–110 St', transfers:[] },
+    { id:'B26N', name:'103 St', transfers:[] },
+    { id:'B27N', name:'96 St', transfers:[] },
+    { id:'B28N', name:'86 St', transfers:[] },
+    { id:'B29N', name:'81 St–Museum of Nat. History', transfers:[] },
+    { id:'B30N', name:'72 St', transfers:[] },
+    { id:'B31N', name:'59 St–Columbus Circle', transfers:['A','C','D','1'] },
+    { id:'B32N', name:'47-50 Sts–Rockefeller Ctr', transfers:['D','F','M'] },
+    { id:'B33N', name:'42 St–Bryant Park', transfers:['D','F','M','7'] },
+    { id:'B34N', name:'34 St–Herald Sq', transfers:['N','Q','R','W'] },
+    { id:'B35N', name:'23 St', transfers:[] },
+    { id:'B36N', name:'14 St', transfers:['F','M','1','2','3'] },
+    { id:'B37N', name:'W 4 St', transfers:['A','C','E','F','M'] },
+    { id:'B38N', name:'Broadway–Lafayette St', transfers:['D','F','M'] },
+    { id:'B39N', name:'Grand St', transfers:[] },
+    { id:'B40N', name:'DeKalb Ave', transfers:['N','Q','R'] },
+    { id:'B41N', name:'Atlantic Ave–Barclays Ctr', transfers:['2','3','4','5','N','Q','R'] },
+];
+
+const J_STATIONS = [
+    { id:'J12N', name:'Jamaica Center–Parsons/Archer', transfers:[] },
+    { id:'J13N', name:'Sutphin Blvd', transfers:['E','J','Z'] },
+    { id:'J14N', name:'Jamaica–Van Wyck', transfers:[] },
+    { id:'J15N', name:'75 Ave', transfers:[] },
+    { id:'J17N', name:'Forest Hills–71 Ave', transfers:[] },
+    { id:'J19N', name:'Kew Gardens–Union Tpke', transfers:[] },
+    { id:'J20N', name:'Briarwood', transfers:[] },
+    { id:'J21N', name:'Jamaica–179 St', transfers:[] },
+    { id:'J22N', name:'Parsons Blvd', transfers:[] },
+    { id:'J23N', name:'Sutphin Blvd', transfers:[] },
+    { id:'J24N', name:'90 St–Elmhurst Ave', transfers:[] },
+    { id:'J27N', name:'Woodhaven Blvd', transfers:[] },
+    { id:'J28N', name:'85 St–Forest Pkwy', transfers:[] },
+    { id:'J29N', name:'75 St–Elderts Lane', transfers:[] },
+    { id:'J30N', name:'Liberty Ave', transfers:[] },
+    { id:'J31N', name:'Van Siclen Ave', transfers:[] },
+    { id:'J32N', name:'Cleveland St', transfers:[] },
+    { id:'J33N', name:'Norwood Ave', transfers:[] },
+    { id:'J34N', name:'Crescent St', transfers:[] },
+    { id:'J38N', name:'Broadway Junction', transfers:['A','C','L'] },
+    { id:'J40N', name:'Kosciuszko St', transfers:[] },
+    { id:'J41N', name:'Myrtle Ave', transfers:['M'] },
+    { id:'J42N', name:'Gates Ave', transfers:[] },
+    { id:'J43N', name:'Halsey St', transfers:[] },
+    { id:'J44N', name:'Hewes St', transfers:[] },
+    { id:'J45N', name:'Marcy Ave', transfers:[] },
+    { id:'J46N', name:'Lorimer St', transfers:[] },
+    { id:'J47N', name:'Flushing Ave', transfers:['G'] },
+    { id:'J48N', name:'Bowery', transfers:[] },
+    { id:'J49N', name:'Canal St', transfers:['6','N','Q','R','W'] },
+    { id:'J50N', name:'Chambers St', transfers:['A','C','E','R','W'] },
+    { id:'J51N', name:'Fulton St', transfers:['A','C','2','3','4','5'] },
+];
+
+// Default station data for lines without full lists
+const DEFAULT_STATIONS = {
+  '2': STATIONS['1'].map(s => ({...s, id: s.id.replace(/^1/, '2')})),
+  '3': STATIONS['1'].map(s => ({...s, id: s.id.replace(/^1/, '3')})),
+  '5': STATIONS['4'].map(s => ({...s, id: s.id.replace(/^4/, '5')})),
+  '6': STATIONS['4'].map(s => ({...s, id: s.id.replace(/^4/, '6')})),
+  '7': [
+    { id:'701N', name:'Flushing–Main St', transfers:[] },
+    { id:'702N', name:'Mets-Willets Point', transfers:[] },
+    { id:'703N', name:'Junction Blvd', transfers:[] },
+    { id:'704N', name:'Jackson Hts–Roosevelt Ave', transfers:['E','F','M','R'] },
+    { id:'705N', name:'74 St–Broadway', transfers:['E','F','M','R'] },
+    { id:'706N', name:'Woodside–61 St', transfers:['LIRR'] },
+    { id:'707N', name:'40 St–Lowery St', transfers:[] },
+    { id:'708N', name:'33 St–Rawson St', transfers:[] },
+    { id:'709N', name:'Queensboro Plaza', transfers:['N','W'] },
+    { id:'710N', name:'Court Sq', transfers:['E','G','M'] },
+    { id:'711N', name:'Hunters Point Ave', transfers:[] },
+    { id:'712N', name:'Vernon Blvd–Jackson Ave', transfers:[] },
+    { id:'713N', name:'34 St–Hudson Yards', transfers:[] },
+    { id:'714N', name:'Times Sq–42 St', transfers:['1','2','3','N','Q','R','W','A','C','E','S'] },
+  ],
+  'C': STATIONS['A'].map(s => ({...s, id: s.id.replace(/^A/, 'C')})),
+  'E': STATIONS['A'].map(s => ({...s, id: s.id.replace(/^A/, 'E')})),
+  'B': B_STATIONS,
+  'D': B_STATIONS.map(s => ({...s, id: s.id.replace(/^B/, 'D')})),
+  'F': STATIONS['A'].map(s => ({...s, id: s.id.replace(/^A/, 'F')})),
+  'M': STATIONS['A'].map(s => ({...s, id: s.id.replace(/^A/, 'M')})),
+  'G': [
+    { id:'G22N', name:'Court Sq', transfers:['7','E','M'] },
+    { id:'G24N', name:'21 St', transfers:[] },
+    { id:'G26N', name:'Greenpoint Ave', transfers:[] },
+    { id:'G28N', name:'Nassau Ave', transfers:[] },
+    { id:'G29N', name:'Metropolitan Ave', transfers:[] },
+    { id:'G30N', name:'Broadway', transfers:['J','M','Z'] },
+    { id:'G31N', name:'Flushing Ave', transfers:['J','M'] },
+    { id:'G32N', name:'Myrtle-Willoughby Aves', transfers:[] },
+    { id:'G33N', name:'Bedford–Nostrand Aves', transfers:[] },
+    { id:'G34N', name:'Classon Ave', transfers:[] },
+    { id:'G35N', name:'Clinton-Washington Aves', transfers:[] },
+    { id:'G36N', name:'Fulton St', transfers:[] },
+    { id:'A42N', name:'Hoyt–Schermerhorn Sts', transfers:[] },
+    { id:'F20N', name:'Bergen St', transfers:[] },
+    { id:'F21N', name:'Carroll St', transfers:[] },
+    { id:'F22N', name:'Smith–9 Sts', transfers:['F'] },
+    { id:'F23N', name:'4 Ave–9 St', transfers:['R'] },
+    { id:'F24N', name:'7 Ave', transfers:[] },
+    { id:'F25N', name:'15 St–Prospect Park', transfers:[] },
+    { id:'F26N', name:'Fort Hamilton Pkwy', transfers:[] },
+    { id:'F27N', name:'Church Ave', transfers:[] },
+  ],
+  'J': J_STATIONS,
+  'Z': J_STATIONS.map(s => ({...s, id: s.id.replace(/^J/, 'Z')})),
+  'Q': STATIONS['N'].map(s => ({...s, id: s.id.replace(/^N/, 'Q')})),
+  'R': STATIONS['N'].map(s => ({...s, id: s.id.replace(/^N/, 'R')})),
+  'W': STATIONS['N'].map(s => ({...s, id: s.id.replace(/^N/, 'W')})),
+  'S': [
+    { id:'S01N', name:'Times Sq–42 St', transfers:['1','2','3','7','A','C','E','N','Q','R','W'] },
+    { id:'S03N', name:'Grand Central–42 St', transfers:['4','5','6','7'] },
+  ],
+  'SIR': [
+    { id:'SI01N', name:'St George', transfers:['Ferry'] },
+    { id:'SI02N', name:'Tompkinsville', transfers:[] },
+    { id:'SI03N', name:'Stapleton', transfers:[] },
+    { id:'SI04N', name:'Clifton', transfers:[] },
+    { id:'SI05N', name:'Grasmere', transfers:[] },
+    { id:'SI06N', name:'Old Town', transfers:[] },
+    { id:'SI07N', name:'Dongan Hills', transfers:[] },
+    { id:'SI08N', name:'Jefferson Ave', transfers:[] },
+    { id:'SI09N', name:'Grant City', transfers:[] },
+    { id:'SI10N', name:'New Dorp', transfers:[] },
+    { id:'SI11N', name:'Oakwood Heights', transfers:[] },
+    { id:'SI12N', name:'Bay Terrace', transfers:[] },
+    { id:'SI13N', name:'Great Kills', transfers:[] },
+    { id:'SI14N', name:'Eltingville', transfers:[] },
+    { id:'SI15N', name:'Annadale', transfers:[] },
+    { id:'SI16N', name:'Huguenot', transfers:[] },
+    { id:'SI17N', name:'Prince\'s Bay', transfers:[] },
+    { id:'SI18N', name:'Pleasant Plains', transfers:[] },
+    { id:'SI19N', name:'Richmond Valley', transfers:[] },
+    { id:'SI20N', name:'Arthur Kill', transfers:[] },
+    { id:'SI21N', name:'Tottenville', transfers:[] },
+  ],
+};
+
+// Merge station data
+Object.assign(STATIONS, DEFAULT_STATIONS);
+
+// Mock service status — will be replaced by API
+const MOCK_STATUS = {
+  good:      ['1','2','3','4','5','6','7','A','C','E','G','L','N','Q','R','W','SIR'],
+  delay:     ['B','D','F'],
+  planned:   ['J','Z','M'],
+  suspended: ['S'],
+};
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let activeTab = 'subway';
+let activeLine = null;
+let activePanelDir = 'uptown';
+let activeStation = null;
+let activeArrivalsDir = 'uptown';
+let apiKey = localStorage.getItem('mta_api_key') || '';
+let serviceStatus = { ...MOCK_STATUS };
+
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
+function init() {
+  updateClock();
+  setInterval(updateClock, 1000);
+  drawHeroLines();
+  renderStatusGroups();
+  loadSettings();
+  fetchServiceStatus();
+}
+
+function updateClock() {
+  const now = new Date();
+  document.getElementById('headerTime').textContent =
+    now.toLocaleTimeString('en-US', { hour: '2-digit', minute:'2-digit', hour12: true });
+}
+
+function drawHeroLines() {
+  const container = document.getElementById('heroLines');
+  const colors = ['#EE352E','#00933C','#B933AD','#0039A6','#FF6319','#FCCC0A','#6CBE45','#A7A9AC'];
+  colors.forEach((color, i) => {
+    const el = document.createElement('div');
+    el.className = 'hero-line';
+    el.style.cssText = `background:${color}; width:${60+Math.random()*140}%; top:${10+i*12}%; left:${-20+Math.random()*20}%; transform:rotate(${-2+Math.random()*4}deg); opacity:${0.08+Math.random()*0.1}`;
+    container.appendChild(el);
+  });
+}
+
+// ─────────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────────
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    if (btn.textContent.toLowerCase().trim() === tab) btn.classList.add('active');
+  });
+  closeSidebar();
+}
+
+function openPage(page) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.getElementById(`tab-${page}`).classList.add('active');
+  closeSidebar();
+}
+
+// ─────────────────────────────────────────────
+// SIDEBAR
+// ─────────────────────────────────────────────
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const isOpen = sidebar.classList.contains('open');
+  if (isOpen) { closeSidebar(); } else {
+    sidebar.classList.add('open');
+    overlay.classList.add('open');
+  }
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+// ─────────────────────────────────────────────
+// STATUS GROUPS
+// ─────────────────────────────────────────────
+function renderStatusGroups() {
+  const container = document.getElementById('statusGroups');
+  const groups = [
+    { key:'good', label:'Good Service', cls:'good', icon:'✓' },
+    { key:'delay', label:'Delays', cls:'delay', icon:'⚠' },
+    { key:'planned', label:'Planned Work', cls:'planned', icon:'🔧' },
+    { key:'suspended', label:'Suspended', cls:'suspended', icon:'✕' },
+  ];
+
+  let goodCount = 0, delayCount = 0, plannedCount = 0;
+  container.innerHTML = '';
+
+  groups.forEach(group => {
+    const lines = serviceStatus[group.key] || [];
+    if (!lines.length) return;
+    if (group.key === 'good') goodCount = lines.length;
+    if (group.key === 'delay') delayCount = lines.length;
+    if (group.key === 'planned') plannedCount = lines.length;
+
+    const groupEl = document.createElement('div');
+    groupEl.className = 'status-group';
+    groupEl.dataset.key = group.key;
+
+    const bullets = lines.map(lineId => {
+      const line = LINES[lineId];
+      if (!line) return '';
+      return `<div class="bullet ${group.cls}" 
+        style="background:${line.color};color:${line.text}"
+        onclick="openLinePanel('${lineId}')"
+        title="${line.name}">${line.label}</div>`;
+    }).join('');
+
+    groupEl.innerHTML = `
+      <div class="status-group-header" onclick="toggleGroup(this)">
+        <div class="status-dot ${group.cls}"></div>
+        <span class="status-label ${group.cls}">${group.label}</span>
+        <span class="status-count">${lines.length} line${lines.length !== 1 ? 's' : ''}</span>
+        <span class="chevron">›</span>
+      </div>
+      <div class="bullets-row" style="max-height:200px">${bullets}</div>
+    `;
+    container.appendChild(groupEl);
+  });
+
+  document.getElementById('statGood').textContent = goodCount;
+  document.getElementById('statDelay').textContent = delayCount;
+  document.getElementById('statPlanned').textContent = plannedCount;
+}
+
+function toggleGroup(header) {
+  const group = header.parentElement;
+  const row = group.querySelector('.bullets-row');
+  const isCollapsed = group.classList.contains('collapsed');
+  if (isCollapsed) {
+    group.classList.remove('collapsed');
+    row.style.maxHeight = '200px';
+  } else {
+    group.classList.add('collapsed');
+    row.style.maxHeight = '0';
+  }
+  header.querySelector('.chevron').style.transform = isCollapsed ? '' : 'rotate(-90deg)';
+}
+
+// ─────────────────────────────────────────────
+// LINE PANEL
+// ─────────────────────────────────────────────
+function openLinePanel(lineId) {
+  activeLine = lineId;
+  activePanelDir = 'uptown';
+  const line = LINES[lineId];
+  if (!line) return;
+
+  // Determine status
+  let statusClass = 'good', statusIcon = '✓', statusText = 'Good Service';
+  if (serviceStatus.delay?.includes(lineId)) { statusClass='delay'; statusIcon='⚠'; statusText='Delays'; }
+  if (serviceStatus.planned?.includes(lineId)) { statusClass='planned'; statusIcon='🔧'; statusText='Planned Work'; }
+  if (serviceStatus.suspended?.includes(lineId)) { statusClass='suspended'; statusIcon='✕'; statusText='Suspended'; }
+
+  // Endpoints
+  const stations = STATIONS[lineId] || [];
+  const uptownEnd = stations[0]?.name || 'Uptown';
+  const downtownEnd = stations[stations.length-1]?.name || 'Downtown';
+
+  document.getElementById('panelHeader').innerHTML = `
+    <div class="panel-bullet" style="background:${line.color};color:${line.text}">${line.label}</div>
+    <div>
+      <div class="panel-line-name">${line.label} Train</div>
+      <div style="font-size:12px;color:var(--text-dim)">${line.name}</div>
+    </div>
+    <div class="panel-close" onclick="closeLinePanel()">✕</div>
+  `;
+
+  const statusBar = document.getElementById('panelStatusBar');
+  statusBar.className = `panel-status-bar ${statusClass}`;
+  statusBar.innerHTML = `<span class="panel-status-icon">${statusIcon}</span><span class="panel-status-text" style="color:var(--${statusClass})">${statusText}</span>`;
+
+  document.getElementById('dirTabUptown').textContent = uptownEnd;
+  document.getElementById('dirTabDowntown').textContent = downtownEnd;
+  document.getElementById('dirTabUptown').className = 'dir-tab active';
+  document.getElementById('dirTabDowntown').className = 'dir-tab';
+
+  renderStationList(lineId, 'uptown');
+
+  document.getElementById('panelBackdrop').classList.add('open');
+  document.getElementById('linePanel').classList.add('open');
+}
+
+function closeLinePanel() {
+  document.getElementById('panelBackdrop').classList.remove('open');
+  document.getElementById('linePanel').classList.remove('open');
+  activeLine = null;
+}
+
+function closePanelOnBackdrop(e) {
+  if (e.target === document.getElementById('panelBackdrop')) closeLinePanel();
+}
+
+function setPanelDir(dir) {
+  activePanelDir = dir;
+  document.getElementById('dirTabUptown').className = 'dir-tab' + (dir === 'uptown' ? ' active' : '');
+  document.getElementById('dirTabDowntown').className = 'dir-tab' + (dir === 'downtown' ? ' active' : '');
+  renderStationList(activeLine, dir);
+}
+
+function renderStationList(lineId, dir) {
+  const line = LINES[lineId];
+  let stations = [...(STATIONS[lineId] || [])];
+  if (dir === 'downtown') stations = [...stations].reverse();
+
+  const list = document.getElementById('stationList');
+  list.innerHTML = stations.map((station, i) => {
+    const isFirst = i === 0;
+    const isLast = i === stations.length - 1;
+    const transferBadges = (station.transfers || []).slice(0, 4).map(t => {
+      const tl = LINES[t];
+      if (!tl) return '';
+      return `<div class="transfer-badge" style="background:${tl.color};color:${tl.text}">${tl.label}</div>`;
+    }).join('');
+
+    return `
+      <div class="station-item" onclick="openStationArrivals('${station.id}', '${lineId}', '${station.name.replace(/'/g,"\\'")}')">
+        <div class="station-dot ${isFirst || isLast ? 'transfer' : ''}" 
+          style="border-color:${line.color};${isFirst||isLast ? `background:${line.color}` : ''}"></div>
+        <div class="station-name">${station.name}</div>
+        <div class="station-transfers">${transferBadges}</div>
+        <div class="station-arrow">›</div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// ARRIVALS
+// ─────────────────────────────────────────────
+function openStationArrivals(stationId, lineId, stationName) {
+  activeStation = { id: stationId, lineId, name: stationName };
+  activeArrivalsDir = 'uptown';
+  const line = LINES[lineId];
+
+  document.getElementById('arrivalsStationName').textContent = stationName;
+  document.getElementById('arrivalsStationLine').textContent = `${line.label} · ${line.name}`;
+
+  const stations = STATIONS[lineId] || [];
+  const uptownEnd = stations[0]?.name || 'Uptown';
+  const downtownEnd = stations[stations.length-1]?.name || 'Downtown';
+  document.getElementById('arrDirUptown').textContent = uptownEnd;
+  document.getElementById('arrDirDowntown').textContent = downtownEnd;
+  document.getElementById('arrDirUptown').className = 'arrivals-dir-tab active';
+  document.getElementById('arrDirDowntown').className = 'arrivals-dir-tab';
+
+  document.getElementById('arrivalsOverlay').classList.add('open');
+  fetchArrivals(stationId, lineId, 'N');
+}
+
+function closeArrivals() {
+  document.getElementById('arrivalsOverlay').classList.remove('open');
+  activeStation = null;
+}
+
+function closeArrivalsOnBackdrop(e) {
+  if (e.target === document.getElementById('arrivalsOverlay')) closeArrivals();
+}
+
+function setArrivalsDir(dir) {
+  activeArrivalsDir = dir;
+  document.getElementById('arrDirUptown').className = 'arrivals-dir-tab' + (dir === 'uptown' ? ' active' : '');
+  document.getElementById('arrDirDowntown').className = 'arrivals-dir-tab' + (dir === 'downtown' ? ' active' : '');
+  if (activeStation) {
+    const gtfsDir = dir === 'uptown' ? 'N' : 'S';
+    fetchArrivals(activeStation.id, activeStation.lineId, gtfsDir);
+  }
+}
+
+async function fetchArrivals(stationId, lineId, direction) {
+  const body = document.getElementById('arrivalsBody');
+  body.innerHTML = `<div class="arrivals-loading"><div class="spinner"></div><span style="color:var(--text-dim);font-size:14px">Loading arrivals…</span></div>`;
+
+  // Base stop ID without direction suffix
+  const baseId = stationId.replace(/[NS]$/, '');
+  const stopId = baseId + direction;
+
+  try {
+    // Try to call the Netlify proxy function
+    const res = await fetch(`/.netlify/functions/gtfs?line=${lineId}&stop=${stopId}`, {
+      headers: apiKey ? { 'x-api-key': apiKey } : {}
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      renderArrivals(data.arrivals, lineId, direction);
+    } else {
+      renderMockArrivals(lineId, direction);
+    }
+  } catch {
+    // Fallback to mock data if no proxy
+    renderMockArrivals(lineId, direction);
+  }
+}
+
+function renderMockArrivals(lineId, direction) {
+  const line = LINES[lineId];
+  const stations = STATIONS[lineId] || [];
+  const terminalUp = stations[0]?.name || 'Uptown';
+  const terminalDown = stations[stations.length-1]?.name || 'Downtown';
+  const dest = direction === 'N' ? terminalUp : terminalDown;
+
+  const mockArrivals = [
+    { mins: 0, dest, express: false },
+    { mins: 4, dest, express: lineId === '4' || lineId === '5' || lineId === 'A' },
+    { mins: 11, dest, express: false },
+    { mins: 18, dest, express: lineId === '4' || lineId === '5' || lineId === 'A' },
+  ];
+
+  renderArrivals(mockArrivals, lineId, direction);
+
+  const body = document.getElementById('arrivalsBody');
+  const notice = document.createElement('div');
+  notice.style.cssText = 'margin-top:20px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text-dim);line-height:1.6;border:1px solid var(--border)';
+  notice.innerHTML = '⚡ <strong style="color:var(--text-secondary)">Demo mode</strong> — Deploy the Netlify function and add your API key in Settings for live arrivals.';
+  body.appendChild(notice);
+}
+
+function renderArrivals(arrivals, lineId, direction) {
+  const body = document.getElementById('arrivalsBody');
+  const line = LINES[lineId];
+
+  if (!arrivals || !arrivals.length) {
+    body.innerHTML = `<div class="no-arrivals"><div class="no-arrivals-icon">🚇</div><div class="no-arrivals-text">No upcoming trains</div></div>`;
+    return;
+  }
+
+  body.innerHTML = arrivals.map(arrival => {
+    const isNow = arrival.mins <= 1;
+    return `
+      <div class="train-arrival">
+        <div class="train-arrival-bullet" style="background:${line.color};color:${line.text}">${line.label}</div>
+        <div class="train-arrival-dest">
+          <div class="train-arrival-dest-name">${arrival.dest}</div>
+          ${arrival.express ? `<div class="train-arrival-dest-via" style="color:${line.color}">Express</div>` : ''}
+        </div>
+        <div class="train-arrival-time">
+          <div class="train-arrival-mins ${isNow ? 'now' : ''}">${isNow ? 'Now' : arrival.mins}</div>
+          ${!isNow ? '<div class="train-arrival-mins-label">min</div>' : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// SERVICE STATUS API
+// ─────────────────────────────────────────────
+async function fetchServiceStatus() {
+  if (!apiKey) return; // Use mock without API key
+  try {
+    const res = await fetch('https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json', {
+      headers: { 'x-api-key': apiKey }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    processAlerts(data);
+  } catch {
+    // Keep mock data
+  }
+}
+
+function processAlerts(alertData) {
+  // Parse MTA alerts JSON and categorize lines
+  // Structure: { entity: [{ id, alert: { informed_entity, header_text, description_text } }] }
+  const delayed = new Set();
+  const suspended = new Set();
+  const planned = new Set();
+
+  (alertData.entity || []).forEach(entity => {
+    const alert = entity.alert;
+    if (!alert) return;
+    const header = (alert.header_text?.translation?.[0]?.text || '').toLowerCase();
+    const affectedLines = (alert.informed_entity || []).map(e => e.route_id).filter(Boolean);
+
+    affectedLines.forEach(routeId => {
+      if (header.includes('suspended') || header.includes('no ')) suspended.add(routeId);
+      else if (header.includes('delay')) delayed.add(routeId);
+      else planned.add(routeId);
+    });
+  });
+
+  const allLines = Object.keys(LINES);
+  serviceStatus = {
+    good: allLines.filter(l => !delayed.has(l) && !suspended.has(l) && !planned.has(l)),
+    delay: [...delayed],
+    planned: [...planned],
+    suspended: [...suspended],
+  };
+  renderStatusGroups();
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────
+function loadSettings() {
+  const input = document.getElementById('apiKeyInput');
+  if (input && apiKey) input.value = apiKey;
+}
+
+function saveSettings() {
+  apiKey = document.getElementById('apiKeyInput').value.trim();
+  localStorage.setItem('mta_api_key', apiKey);
+  fetchServiceStatus();
+  openPage('subway');
+  setTab('subway');
+}
+
+// ─────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
