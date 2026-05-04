@@ -1,5 +1,4 @@
-// netlify/functions/gtfs.js
-// Scans GTFS-RT protobuf for stop arrivals without full proto parsing
+// netlify/functions/gtfs.js — zero dependencies
  
 const FEED_URLS = {
   '1':'nyct%2Fgtfs','2':'nyct%2Fgtfs','3':'nyct%2Fgtfs',
@@ -35,7 +34,6 @@ const TERMINALS = {
   }
 };
  
-// Read varint from buffer at pos, return {value, pos}
 function readVarint(buf, pos) {
   let result = 0, shift = 0, b;
   do {
@@ -47,236 +45,124 @@ function readVarint(buf, pos) {
   return { value: result, pos };
 }
  
-// Read UTF-8 string from buffer
-function readUtf8(buf, start, len) {
-  try {
-    return Buffer.from(buf.buffer, buf.byteOffset + start, len).toString('utf8');
-  } catch {
-    return '';
-  }
+// Read a length-prefixed string at pos, return {str, nextPos}
+function readLenString(buf, pos) {
+  const l = readVarint(buf, pos);
+  const start = l.pos;
+  const end = start + l.value;
+  if (end > buf.length) return { str: null, nextPos: end };
+  const str = Buffer.from(buf.buffer, buf.byteOffset + start, l.value).toString('utf8');
+  return { str, nextPos: end };
 }
  
-// Check if a string looks like a valid GTFS stop ID (e.g. "101N", "A27S", "L03N")
-function isValidStopId(s) {
-  return /^[A-Z0-9]{2,6}[NS]$/.test(s);
-}
- 
-// Check if a string looks like a valid route ID
-function isValidRouteId(s) {
-  return /^[A-Z0-9]{1,3}$/.test(s);
-}
- 
-// Fully parse GTFS-RT protobuf
-// We walk the wire format carefully, tracking nested message boundaries
-function parseGtfsRt(buffer) {
+// Scan the entire buffer for strings matching stop ID pattern (e.g. "101N", "A27S")
+// and nearby varint timestamps, pairing them with the closest route ID string
+function scanBuffer(buffer) {
   const buf = new Uint8Array(buffer);
-  const results = []; // {routeId, stopId, time}
+  const results = [];
  
-  function skip(pos, wireType) {
-    if (wireType === 0) { const v = readVarint(buf, pos); return v.pos; }
-    if (wireType === 1) return pos + 8;
-    if (wireType === 2) { const l = readVarint(buf, pos); return l.pos + l.value; }
-    if (wireType === 5) return pos + 4;
-    return pos + 1;
+  // First pass: find all strings in the buffer
+  // A length-delimited string field tag will be wireType=2
+  // We scan every possible position for tag bytes that indicate string fields
+ 
+  // Collect all (position, string) pairs for ASCII strings that look like stop IDs or route IDs
+  const strings = []; // {pos, str}
+ 
+  for (let i = 0; i < buf.length - 2; i++) {
+    const byte = buf[i];
+    // wiretype 2 (length-delimited), any field number 1-15 = 0x0a, 0x12, 0x1a, 0x22, 0x2a, 0x32, 0x3a, 0x42, 0x4a, 0x52, 0x5a, 0x62, 0x6a, 0x72, 0x7a
+    if ((byte & 0x07) !== 2) continue;
+ 
+    const lenV = readVarint(buf, i + 1);
+    const strLen = lenV.value;
+    if (strLen < 1 || strLen > 20) continue;
+ 
+    const strStart = lenV.pos;
+    const strEnd = strStart + strLen;
+    if (strEnd > buf.length) continue;
+ 
+    // Check if all bytes are printable ASCII
+    let allAscii = true;
+    for (let j = strStart; j < strEnd; j++) {
+      if (buf[j] < 32 || buf[j] > 126) { allAscii = false; break; }
+    }
+    if (!allAscii) continue;
+ 
+    const str = Buffer.from(buf.buffer, buf.byteOffset + strStart, strLen).toString('utf8');
+    strings.push({ pos: i, end: strEnd, str });
   }
  
-  // Parse a StopTimeEvent message (arrival or departure), return unix timestamp or null
-  function parseStopTimeEvent(start, end) {
-    let pos = start;
+  // Now find stop ID / route ID / timestamp triples
+  // In GTFS-RT, within a StopTimeUpdate:
+  //   field 1 (stop_sequence): varint
+  //   field 3 (stop_id): string  — tag = 0x1a
+  //   field 4 (arrival): embedded msg with field 2 (time): varint — tag = 0x22, then inside tag 0x10
+  //   field 5 (departure): embedded msg — tag = 0x2a
+ 
+  // Strategy: find all stop_id strings (tag 0x1a = field 3, wiretype 2)
+  // then look nearby for timestamps
+ 
+  const stopIdTag = 0x1a; // field 3, wire type 2
+  const routeIdTag = 0x2a; // field 5 in TripDescriptor, wire type 2
+ 
+  // Find route IDs: they appear as field 5 (tag 0x2a) in TripDescriptor
+  // which is field 1 (tag 0x0a) in TripUpdate, which is field 3 (tag 0x1a) in FeedEntity
+  const routePositions = []; // {pos, routeId}
+  for (const s of strings) {
+    if (buf[s.pos] === routeIdTag && /^[A-Z0-9]{1,3}$/.test(s.str)) {
+      routePositions.push({ pos: s.pos, routeId: s.str });
+    }
+  }
+ 
+  // Find stop IDs: tag 0x1a, string matching stop ID pattern
+  for (const s of strings) {
+    if (buf[s.pos] !== stopIdTag) continue;
+    if (!/^[A-Z0-9]{2,6}[NS]$/.test(s.str)) continue;
+ 
+    // Find the most recent route ID before this position
+    let routeId = null;
+    for (let r = routePositions.length - 1; r >= 0; r--) {
+      if (routePositions[r].pos < s.pos) {
+        routeId = routePositions[r].routeId;
+        break;
+      }
+    }
+ 
+    // Look for arrival/departure time after this stop_id
+    // arrival tag = 0x22 (field 4, wire 2), departure tag = 0x2a (field 5, wire 2)
+    // Inside those, time is field 2 varint: tag 0x10
     let time = null;
-    while (pos < end) {
-      const tag = readVarint(buf, pos); pos = tag.pos;
-      if (pos >= end) break;
-      const fieldNum = tag.value >> 3;
-      const wireType = tag.value & 7;
-      if (fieldNum === 2 && wireType === 0) {
-        // time field (sint64, zigzag encoded for negative, but timestamps are positive)
-        const v = readVarint(buf, pos); pos = v.pos;
-        time = v.value;
-      } else {
-        pos = skip(pos, wireType);
-      }
-    }
-    return time;
-  }
+    let scanPos = s.end;
+    const scanLimit = Math.min(s.end + 30, buf.length);
  
-  // Parse a StopTimeUpdate message, return {stopId, time}
-  function parseStopTimeUpdate(start, end) {
-    let pos = start;
-    let stopId = null;
-    let arrivalTime = null;
-    let departureTime = null;
- 
-    while (pos < end) {
-      const tag = readVarint(buf, pos); pos = tag.pos;
-      if (pos >= end) break;
-      const fieldNum = tag.value >> 3;
-      const wireType = tag.value & 7;
- 
-      if (wireType === 2) {
-        const lenV = readVarint(buf, pos); pos = lenV.pos;
-        const msgLen = lenV.value;
-        const msgEnd = pos + msgLen;
- 
-        if (fieldNum === 3) {
-          // stop_id is a string
-          const s = readUtf8(buf, pos, msgLen);
-          if (isValidStopId(s)) stopId = s;
-          pos = msgEnd;
-        } else if (fieldNum === 4) {
-          // arrival StopTimeEvent
-          arrivalTime = parseStopTimeEvent(pos, msgEnd);
-          pos = msgEnd;
-        } else if (fieldNum === 5) {
-          // departure StopTimeEvent
-          departureTime = parseStopTimeEvent(pos, msgEnd);
-          pos = msgEnd;
-        } else {
-          pos = msgEnd;
+    while (scanPos < scanLimit) {
+      const t = buf[scanPos];
+      if (t === 0x22 || t === 0x2a) {
+        // arrival or departure message
+        const innerLen = readVarint(buf, scanPos + 1);
+        const innerStart = innerLen.pos;
+        const innerEnd = innerStart + innerLen.value;
+        // Look for time field (tag 0x10 = field 2, varint) inside
+        let ip = innerStart;
+        while (ip < innerEnd && ip < buf.length) {
+          if (buf[ip] === 0x10) {
+            // time varint
+            const tv = readVarint(buf, ip + 1);
+            if (tv.value > 1700000000 && tv.value < 2000000000) {
+              time = tv.value;
+              break;
+            }
+          }
+          ip++;
         }
-      } else if (wireType === 0) {
-        const v = readVarint(buf, pos); pos = v.pos;
-        // stop_sequence is field 1 (uint32), ignore
+        if (time) break;
+        scanPos = innerEnd;
       } else {
-        pos = skip(pos, wireType);
+        scanPos++;
       }
     }
  
-    return { stopId, time: arrivalTime || departureTime };
-  }
- 
-  // Parse a TripDescriptor, return routeId
-  function parseTripDescriptor(start, end) {
-    let pos = start;
-    let routeId = null;
-    while (pos < end) {
-      const tag = readVarint(buf, pos); pos = tag.pos;
-      if (pos >= end) break;
-      const fieldNum = tag.value >> 3;
-      const wireType = tag.value & 7;
-      if (wireType === 2) {
-        const lenV = readVarint(buf, pos); pos = lenV.pos;
-        const msgLen = lenV.value;
-        const msgEnd = pos + msgLen;
-        if (fieldNum === 5) {
-          // route_id
-          const s = readUtf8(buf, pos, msgLen);
-          if (isValidRouteId(s)) routeId = s;
-        }
-        pos = msgEnd;
-      } else if (wireType === 0) {
-        pos = skip(pos, wireType);
-      } else {
-        pos = skip(pos, wireType);
-      }
-    }
-    return routeId;
-  }
- 
-  // Parse a TripUpdate message
-  function parseTripUpdate(start, end) {
-    let pos = start;
-    let routeId = null;
-    const stus = [];
- 
-    while (pos < end) {
-      const tag = readVarint(buf, pos); pos = tag.pos;
-      if (pos >= end) break;
-      const fieldNum = tag.value >> 3;
-      const wireType = tag.value & 7;
- 
-      if (wireType === 2) {
-        const lenV = readVarint(buf, pos); pos = lenV.pos;
-        const msgLen = lenV.value;
-        const msgEnd = pos + msgLen;
- 
-        if (fieldNum === 1) {
-          // trip (TripDescriptor)
-          routeId = parseTripDescriptor(pos, msgEnd);
-          pos = msgEnd;
-        } else if (fieldNum === 2) {
-          // stop_time_update
-          const stu = parseStopTimeUpdate(pos, msgEnd);
-          stus.push(stu);
-          pos = msgEnd;
-        } else {
-          pos = msgEnd;
-        }
-      } else if (wireType === 0) {
-        pos = skip(pos, wireType);
-      } else {
-        pos = skip(pos, wireType);
-      }
-    }
- 
-    return { routeId, stus };
-  }
- 
-  // Parse a FeedEntity message
-  function parseFeedEntity(start, end) {
-    let pos = start;
-    let tu = null;
- 
-    while (pos < end) {
-      const tag = readVarint(buf, pos); pos = tag.pos;
-      if (pos >= end) break;
-      const fieldNum = tag.value >> 3;
-      const wireType = tag.value & 7;
- 
-      if (wireType === 2) {
-        const lenV = readVarint(buf, pos); pos = lenV.pos;
-        const msgLen = lenV.value;
-        const msgEnd = pos + msgLen;
- 
-        if (fieldNum === 3) {
-          // trip_update
-          tu = parseTripUpdate(pos, msgEnd);
-          pos = msgEnd;
-        } else {
-          pos = msgEnd;
-        }
-      } else if (wireType === 0) {
-        pos = skip(pos, wireType);
-      } else {
-        pos = skip(pos, wireType);
-      }
-    }
- 
-    if (tu) {
-      for (const stu of tu.stus) {
-        results.push({ routeId: tu.routeId, stopId: stu.stopId, time: stu.time });
-      }
-    }
-  }
- 
-  // Parse top-level FeedMessage
-  let pos = 0;
-  while (pos < buf.length) {
-    const tag = readVarint(buf, pos); pos = tag.pos;
-    if (pos >= buf.length) break;
-    const fieldNum = tag.value >> 3;
-    const wireType = tag.value & 7;
- 
-    if (wireType === 2) {
-      const lenV = readVarint(buf, pos); pos = lenV.pos;
-      const msgLen = lenV.value;
-      const msgEnd = pos + msgLen;
- 
-      if (fieldNum === 1) {
-        // header - skip
-        pos = msgEnd;
-      } else if (fieldNum === 2) {
-        // entity
-        parseFeedEntity(pos, msgEnd);
-        pos = msgEnd;
-      } else {
-        pos = msgEnd;
-      }
-    } else if (wireType === 0) {
-      pos = skip(pos, wireType);
-    } else {
-      pos = skip(pos, wireType);
-    }
+    results.push({ stopId: s.str, routeId, time });
   }
  
   return results;
@@ -297,24 +183,23 @@ exports.handler = async (event) => {
     if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}` }) };
  
     const buffer = await response.arrayBuffer();
-    const entries = parseGtfsRt(buffer);
+    const entries = scanBuffer(buffer);
     const now = Math.floor(Date.now() / 1000);
     const direction = stop.endsWith('N') ? 'N' : 'S';
  
-    // Debug mode — show what stop IDs and routes we're actually parsing
     if (debug === 'true') {
-      const validStops = entries.filter(e => e.stopId).map(e => e.stopId);
-      const uniqueStops = [...new Set(validStops)].slice(0, 60);
+      const uniqueStops = [...new Set(entries.map(e => e.stopId).filter(Boolean))].slice(0, 60);
       const uniqueRoutes = [...new Set(entries.map(e => e.routeId).filter(Boolean))];
+      const sample = entries.filter(e => e.stopId && e.time).slice(0, 10);
       return {
         statusCode: 200, headers,
         body: JSON.stringify({
           totalEntries: entries.length,
-          validStopCount: validStops.length,
+          withTime: entries.filter(e => e.time).length,
           sampleStopIds: uniqueStops,
           routeIds: uniqueRoutes,
+          sampleWithTime: sample,
           requestedStop: stop,
-          requestedLine: line,
         })
       };
     }
