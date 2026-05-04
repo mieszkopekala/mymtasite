@@ -1,5 +1,4 @@
-// netlify/functions/gtfs.js
-// Zero dependencies - parses protobuf manually
+// netlify/functions/gtfs.js - Zero dependencies
  
 const FEED_URLS = {
   '1':'nyct%2Fgtfs','2':'nyct%2Fgtfs','3':'nyct%2Fgtfs',
@@ -34,13 +33,10 @@ const TERMINALS = {
   }
 };
  
+// ── Protobuf helpers ──
 function readVarint(buf, pos) {
-  let result = 0, shift = 0, byte;
-  do {
-    byte = buf[pos++];
-    result |= (byte & 0x7f) << shift;
-    shift += 7;
-  } while (byte & 0x80);
+  let result = 0, shift = 0, b;
+  do { b = buf[pos++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
   return { value: result, pos };
 }
  
@@ -48,17 +44,19 @@ function readString(buf, pos, len) {
   return { value: Buffer.from(buf.buffer, buf.byteOffset + pos, len).toString('utf8'), pos: pos + len };
 }
  
+function skip(buf, pos, wireType) {
+  if (wireType === 0) { const v = readVarint(buf, pos); return v.pos; }
+  if (wireType === 1) return pos + 8;
+  if (wireType === 2) { const l = readVarint(buf, pos); return l.pos + l.value; }
+  if (wireType === 5) return pos + 4;
+  return pos + 1;
+}
+ 
+// ── Parse GTFS-RT ──
 function parseGtfsRt(buffer) {
   const buf = new Uint8Array(buffer);
-  const arrivals_raw = [];
+  const results = []; // { routeId, stopId, time }
   let pos = 0;
- 
-  function skip(wireType) {
-    if (wireType === 0) { const v = readVarint(buf, pos); pos = v.pos; }
-    else if (wireType === 2) { const l = readVarint(buf, pos); pos = l.pos; pos += l.value; }
-    else if (wireType === 5) { pos += 4; }
-    else if (wireType === 1) { pos += 8; }
-  }
  
   function parseTimeEvent(end) {
     let time = null;
@@ -66,10 +64,9 @@ function parseGtfsRt(buffer) {
       const t = readVarint(buf, pos); pos = t.pos;
       const f = t.value >> 3, w = t.value & 7;
       if (f === 2 && w === 0) { const v = readVarint(buf, pos); pos = v.pos; time = v.value; }
-      else skip(w);
+      else pos = skip(buf, pos, w);
     }
-    pos = end;
-    return time;
+    pos = end; return time;
   }
  
   function parseStopTimeUpdate(end) {
@@ -84,41 +81,38 @@ function parseGtfsRt(buffer) {
         else if (f === 4) { arrival = parseTimeEvent(mEnd); }
         else if (f === 5) { departure = parseTimeEvent(mEnd); }
         else pos = mEnd;
-      } else skip(w);
+      } else pos = skip(buf, pos, w);
     }
     pos = end;
     return { stopId, time: arrival || departure };
   }
  
-  function parseTripDescriptor(end) {
-    let routeId = null;
-    while (pos < end) {
-      const t = readVarint(buf, pos); pos = t.pos;
-      const f = t.value >> 3, w = t.value & 7;
-      if (w === 2) {
-        const l = readVarint(buf, pos); pos = l.pos;
-        const mEnd = pos + l.value;
-        if (f === 5) { const s = readString(buf, pos, l.value); pos = s.pos; routeId = s.value; }
-        else pos = mEnd;
-      } else skip(w);
-    }
-    pos = end;
-    return routeId;
-  }
- 
   function parseTripUpdate(end) {
-    let routeId = null;
-    const stus = [];
+    let routeId = null; const stus = [];
     while (pos < end) {
       const t = readVarint(buf, pos); pos = t.pos;
       const f = t.value >> 3, w = t.value & 7;
       if (w === 2) {
         const l = readVarint(buf, pos); pos = l.pos;
         const mEnd = pos + l.value;
-        if (f === 1) { routeId = parseTripDescriptor(mEnd); }
+        if (f === 1) {
+          // trip descriptor - find route_id (field 5)
+          const tripEnd = mEnd;
+          while (pos < tripEnd) {
+            const tt = readVarint(buf, pos); pos = tt.pos;
+            const tf = tt.value >> 3, tw = tt.value & 7;
+            if (tw === 2) {
+              const tl = readVarint(buf, pos); pos = tl.pos;
+              const tEnd = pos + tl.value;
+              if (tf === 5) { const s = readString(buf, pos, tl.value); pos = s.pos; routeId = s.value; }
+              else pos = tEnd;
+            } else pos = skip(buf, pos, tw);
+          }
+          pos = tripEnd;
+        }
         else if (f === 2) { stus.push(parseStopTimeUpdate(mEnd)); }
         else pos = mEnd;
-      } else skip(w);
+      } else pos = skip(buf, pos, w);
     }
     pos = end;
     return { routeId, stus };
@@ -134,10 +128,14 @@ function parseGtfsRt(buffer) {
         const mEnd = pos + l.value;
         if (f === 3) { tu = parseTripUpdate(mEnd); }
         else pos = mEnd;
-      } else skip(w);
+      } else pos = skip(buf, pos, w);
     }
     pos = end;
-    if (tu) arrivals_raw.push(tu);
+    if (tu) {
+      for (const stu of tu.stus) {
+        results.push({ routeId: tu.routeId, stopId: stu.stopId, time: stu.time });
+      }
+    }
   }
  
   while (pos < buf.length) {
@@ -148,15 +146,16 @@ function parseGtfsRt(buffer) {
       const mEnd = pos + l.value;
       if (f === 2) { parseEntity(mEnd); }
       else pos = mEnd;
-    } else skip(w);
+    } else pos = skip(buf, pos, w);
   }
  
-  return arrivals_raw;
+  return results;
 }
  
 exports.handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
-  const { line, stop } = event.queryStringParameters || {};
+  const { line, stop, debug } = event.queryStringParameters || {};
+ 
   if (!line || !stop) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing line or stop' }) };
  
   const feedPath = FEED_URLS[line];
@@ -165,32 +164,48 @@ exports.handler = async (event) => {
   try {
     const url = `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/${feedPath}`;
     const response = await fetch(url);
-    if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}` }) };
+    if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}`, url }) };
  
     const buffer = await response.arrayBuffer();
-    const entities = parseGtfsRt(buffer);
+    const allEntries = parseGtfsRt(buffer);
     const now = Math.floor(Date.now() / 1000);
     const direction = stop.endsWith('N') ? 'N' : 'S';
-    const arrivals = [];
  
-    for (const tu of entities) {
-      for (const stu of tu.stus) {
-        if (stu.stopId !== stop) continue;
-        if (!stu.time) continue;
-        const diffSec = stu.time - now;
-        if (diffSec < -30 || diffSec > 3600) continue;
-        arrivals.push({
-          mins: Math.max(0, Math.round(diffSec / 60)),
-          dest: TERMINALS[direction]?.[tu.routeId || line] || (direction === 'N' ? 'Uptown' : 'Downtown'),
-          express: ['4','5','A','D','B','N','Q'].includes(tu.routeId),
-          routeId: tu.routeId || line,
-        });
-      }
+    // DEBUG MODE — shows sample stop IDs from the feed so we can verify format
+    if (debug === 'true') {
+      const sampleStops = [...new Set(allEntries.map(e => e.stopId).filter(Boolean))].slice(0, 50);
+      const sampleRoutes = [...new Set(allEntries.map(e => e.routeId).filter(Boolean))];
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({
+          totalEntries: allEntries.length,
+          sampleStopIds: sampleStops,
+          routeIds: sampleRoutes,
+          requestedStop: stop,
+          requestedLine: line,
+          feedUrl: url,
+        })
+      };
+    }
+ 
+    const arrivals = [];
+    for (const entry of allEntries) {
+      if (entry.stopId !== stop) continue;
+      if (!entry.time) continue;
+      const diffSec = entry.time - now;
+      if (diffSec < -30 || diffSec > 3600) continue;
+      arrivals.push({
+        mins: Math.max(0, Math.round(diffSec / 60)),
+        dest: TERMINALS[direction]?.[entry.routeId || line] || (direction === 'N' ? 'Uptown' : 'Downtown'),
+        express: ['4','5','A','D','B','N','Q'].includes(entry.routeId),
+        routeId: entry.routeId || line,
+      });
     }
  
     arrivals.sort((a, b) => a.mins - b.mins);
-    return { statusCode: 200, headers, body: JSON.stringify({ arrivals: arrivals.slice(0, 6), stop, line, direction }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ arrivals: arrivals.slice(0, 6), stop, line, direction, total: allEntries.length }) };
+ 
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message, stack: err.stack }) };
   }
 };
