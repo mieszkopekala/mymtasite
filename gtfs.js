@@ -73,11 +73,6 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing line or stop parameter' }) };
   }
 
-  const apiKey = process.env.MTA_API_KEY;
-  if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'MTA_API_KEY not set in environment variables' }) };
-  }
-
   const feedPath = FEED_URLS[line];
   if (!feedPath) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: `Unknown line: ${line}` }) };
@@ -85,9 +80,7 @@ exports.handler = async (event) => {
 
   try {
     const url = `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/${feedPath}`;
-    const response = await fetch(url, {
-      headers: { 'x-api-key': apiKey }
-    });
+    const response = await fetch(url);
 
     if (!response.ok) {
       return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA API returned ${response.status}` }) };
