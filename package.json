@@ -1,4 +1,7 @@
 {
   "name": "mta-live",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "dependencies": {
+    "gtfs-realtime-bindings": "0.0.5"
+  }
 }
