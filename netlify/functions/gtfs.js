@@ -47,20 +47,38 @@ exports.handler = async (event) => {
     const response = await fetch(url);
     if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}` }) };
  
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const feed = transit_realtime.FeedMessage.decode(buffer);
+    const arrayBuf = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+ 
+    // Try to decode
+    let feed;
+    try {
+      feed = transit_realtime.FeedMessage.decode(buffer);
+    } catch(decodeErr) {
+      return { statusCode: 500, headers, body: JSON.stringify({ 
+        error: 'Decode failed', 
+        decodeError: decodeErr.message,
+        bufferLength: buffer.length,
+        firstBytes: buffer.slice(0, 20).toString('hex')
+      })};
+    }
  
     const now = Math.floor(Date.now() / 1000);
     const direction = stop.endsWith('N') ? 'N' : 'S';
     const entries = [];
  
-    for (const entity of feed.entity) {
-      const tu = entity.trip_update;
+    for (const entity of (feed.entity || [])) {
+      const tu = entity.tripUpdate || entity.trip_update;
       if (!tu) continue;
-      const routeId = tu.trip?.route_id || line;
-      for (const stu of (tu.stop_time_update || [])) {
-        const stopId = stu.stop_id;
-        const time = stu.arrival?.time?.low || stu.departure?.time?.low || null;
+      const routeId = (tu.trip && (tu.trip.routeId || tu.trip.route_id)) || line;
+      const updates = tu.stopTimeUpdate || tu.stop_time_update || [];
+      for (const stu of updates) {
+        const stopId = stu.stopId || stu.stop_id;
+        const arr = stu.arrival;
+        const dep = stu.departure;
+        const time = (arr && (arr.time || arr.time?.low || arr.time?.toNumber?.()))
+                  || (dep && (dep.time || dep.time?.low || dep.time?.toNumber?.()))
+                  || null;
         entries.push({ routeId, stopId, time });
       }
     }
@@ -68,6 +86,7 @@ exports.handler = async (event) => {
     if (debug === 'true') {
       const uniqueStops = [...new Set(entries.map(e => e.stopId).filter(Boolean))].slice(0, 60);
       const uniqueRoutes = [...new Set(entries.map(e => e.routeId).filter(Boolean))];
+      const sample = entries.filter(e => e.stopId && e.time).slice(0, 5);
       return {
         statusCode: 200, headers,
         body: JSON.stringify({
@@ -75,6 +94,8 @@ exports.handler = async (event) => {
           withTime: entries.filter(e => e.time).length,
           sampleStopIds: uniqueStops,
           routeIds: uniqueRoutes,
+          sampleWithTime: sample,
+          entityCount: (feed.entity || []).length,
           requestedStop: stop,
         })
       };
@@ -97,6 +118,6 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: JSON.stringify({ arrivals: arrivals.slice(0, 6), stop, line, direction }) };
  
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message, stack: err.stack }) };
   }
 };
