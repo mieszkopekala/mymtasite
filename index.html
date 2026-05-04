@@ -404,8 +404,7 @@
     /* ── BUS TAB ── */
     .bus-hero {
       background: var(--surface); border-bottom: 1px solid var(--border);
-      padding: 24px 28px 20px; display: flex; flex-direction: column; gap: 16px;
-      position: relative; overflow: hidden;
+      padding: 24px 28px 20px; position: relative; overflow: hidden;
     }
     .bus-hero::before {
       content: '🚌'; position: absolute; right: 20px; top: 50%; transform: translateY(-50%);
@@ -413,7 +412,11 @@
     }
     .bus-hero-content { position: relative; z-index: 1; }
 
-    .bus-search-wrap { position: relative; z-index: 10; }
+    .bus-search-section {
+      padding: 16px 24px; border-bottom: 1px solid var(--border);
+      background: var(--bg); position: relative; z-index: 20;
+    }
+    .bus-search-wrap { position: relative; }
     .bus-search-box {
       display: flex; align-items: center; gap: 0;
       background: var(--surface2); border: 1px solid var(--border2);
@@ -671,12 +674,17 @@
   <!-- BUS TAB -->
   <div class="tab-content" id="tab-bus">
 
-    <!-- Bus Hero -->
+    <!-- Bus Hero (title only) -->
     <div class="bus-hero">
       <div class="bus-hero-content">
         <div class="hero-eyebrow">Real-Time Tracking</div>
         <div class="hero-title" style="font-size:36px">Bus Tracker</div>
+        <div class="hero-subtitle">Search a route number or stop name</div>
       </div>
+    </div>
+
+    <!-- Search bar (outside hero, in body) -->
+    <div class="bus-search-section">
       <div class="bus-search-wrap">
         <div class="bus-search-box">
           <span class="bus-search-icon">🔍</span>
@@ -684,10 +692,11 @@
             id="busSearchInput"
             class="bus-search-input"
             type="text"
-            placeholder="Search route or stop (e.g. M15, Bx12, 5th Ave)"
+            placeholder="Route or stop  (e.g. M15, Bx12, 5th Ave &amp; 42nd)"
             autocomplete="off"
             oninput="onBusSearch(this.value)"
             onkeydown="if(event.key==='Enter') runBusSearch()"
+            onblur="hideBusSearch()"
           />
           <button class="bus-search-btn" onclick="runBusSearch()">Go</button>
         </div>
