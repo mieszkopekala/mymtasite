@@ -1,4 +1,5 @@
-// netlify/functions/gtfs.js - Zero dependencies
+// netlify/functions/gtfs.js
+// Scans GTFS-RT protobuf for stop arrivals without full proto parsing
  
 const FEED_URLS = {
   '1':'nyct%2Fgtfs','2':'nyct%2Fgtfs','3':'nyct%2Fgtfs',
@@ -20,117 +21,227 @@ const TERMINALS = {
     'B':'Bedford Park Blvd','D':'Norwood–205 St','F':'Jamaica–179 St','M':'Forest Hills–71 Ave',
     'G':'Court Sq','J':'Jamaica Center','Z':'Jamaica Center',
     'L':'8 Ave','N':'Astoria–Ditmars Blvd','Q':'96 St','R':'Forest Hills–71 Ave','W':'Astoria–Ditmars Blvd',
-    'S':'Times Sq','SIR':'St George',
+    'GS':'Times Sq','S':'Times Sq','SIR':'St George',
   },
   S:{
-    '1':'South Ferry','2':'Flatbush Ave','3':'New Lots Ave',
-    '4':'Crown Hts–Utica Ave','5':'Flatbush Ave','6':'Brooklyn Bridge','7':'34 St–Hudson Yards',
+    '1':'South Ferry','2':'Flatbush Ave–Brooklyn College','3':'New Lots Ave',
+    '4':'Crown Hts–Utica Ave','5':'Flatbush Ave–Brooklyn College','6':'Brooklyn Bridge–City Hall','7':'34 St–Hudson Yards',
     'A':'Far Rockaway','C':'Euclid Ave','E':'8 Ave',
-    'B':'Brighton Beach','D':'Coney Island','F':'Coney Island','M':'Middle Village',
+    'B':'Brighton Beach','D':'Coney Island–Stillwell Ave','F':'Coney Island–Stillwell Ave','M':'Middle Village–Metropolitan Ave',
     'G':'Church Ave','J':'Broad St','Z':'Broad St',
-    'L':'Canarsie–Rockaway Pkwy','N':'Coney Island','Q':'Coney Island','R':'Bay Ridge–95 St','W':'Whitehall St',
-    'S':'Grand Central','SIR':'Tottenville',
+    'L':'Canarsie–Rockaway Pkwy','N':'Coney Island–Stillwell Ave','Q':'Coney Island–Stillwell Ave',
+    'R':'Bay Ridge–95 St','W':'Whitehall St–South Ferry',
+    'GS':'Grand Central','S':'Grand Central','SIR':'Tottenville',
   }
 };
  
-// ── Protobuf helpers ──
+// Read varint from buffer at pos, return {value, pos}
 function readVarint(buf, pos) {
   let result = 0, shift = 0, b;
-  do { b = buf[pos++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+  do {
+    if (pos >= buf.length) return { value: result, pos };
+    b = buf[pos++];
+    result |= (b & 0x7f) << shift;
+    shift += 7;
+  } while (b & 0x80);
   return { value: result, pos };
 }
  
-function readString(buf, pos, len) {
-  return { value: Buffer.from(buf.buffer, buf.byteOffset + pos, len).toString('utf8'), pos: pos + len };
+// Read UTF-8 string from buffer
+function readUtf8(buf, start, len) {
+  try {
+    return Buffer.from(buf.buffer, buf.byteOffset + start, len).toString('utf8');
+  } catch {
+    return '';
+  }
 }
  
-function skip(buf, pos, wireType) {
-  if (wireType === 0) { const v = readVarint(buf, pos); return v.pos; }
-  if (wireType === 1) return pos + 8;
-  if (wireType === 2) { const l = readVarint(buf, pos); return l.pos + l.value; }
-  if (wireType === 5) return pos + 4;
-  return pos + 1;
+// Check if a string looks like a valid GTFS stop ID (e.g. "101N", "A27S", "L03N")
+function isValidStopId(s) {
+  return /^[A-Z0-9]{2,6}[NS]$/.test(s);
 }
  
-// ── Parse GTFS-RT ──
+// Check if a string looks like a valid route ID
+function isValidRouteId(s) {
+  return /^[A-Z0-9]{1,3}$/.test(s);
+}
+ 
+// Fully parse GTFS-RT protobuf
+// We walk the wire format carefully, tracking nested message boundaries
 function parseGtfsRt(buffer) {
   const buf = new Uint8Array(buffer);
-  const results = []; // { routeId, stopId, time }
-  let pos = 0;
+  const results = []; // {routeId, stopId, time}
  
-  function parseTimeEvent(end) {
+  function skip(pos, wireType) {
+    if (wireType === 0) { const v = readVarint(buf, pos); return v.pos; }
+    if (wireType === 1) return pos + 8;
+    if (wireType === 2) { const l = readVarint(buf, pos); return l.pos + l.value; }
+    if (wireType === 5) return pos + 4;
+    return pos + 1;
+  }
+ 
+  // Parse a StopTimeEvent message (arrival or departure), return unix timestamp or null
+  function parseStopTimeEvent(start, end) {
+    let pos = start;
     let time = null;
     while (pos < end) {
-      const t = readVarint(buf, pos); pos = t.pos;
-      const f = t.value >> 3, w = t.value & 7;
-      if (f === 2 && w === 0) { const v = readVarint(buf, pos); pos = v.pos; time = v.value; }
-      else pos = skip(buf, pos, w);
+      const tag = readVarint(buf, pos); pos = tag.pos;
+      if (pos >= end) break;
+      const fieldNum = tag.value >> 3;
+      const wireType = tag.value & 7;
+      if (fieldNum === 2 && wireType === 0) {
+        // time field (sint64, zigzag encoded for negative, but timestamps are positive)
+        const v = readVarint(buf, pos); pos = v.pos;
+        time = v.value;
+      } else {
+        pos = skip(pos, wireType);
+      }
     }
-    pos = end; return time;
+    return time;
   }
  
-  function parseStopTimeUpdate(end) {
-    let stopId = null, arrival = null, departure = null;
-    while (pos < end) {
-      const t = readVarint(buf, pos); pos = t.pos;
-      const f = t.value >> 3, w = t.value & 7;
-      if (w === 2) {
-        const l = readVarint(buf, pos); pos = l.pos;
-        const mEnd = pos + l.value;
-        if (f === 3) { const s = readString(buf, pos, l.value); pos = s.pos; stopId = s.value; }
-        else if (f === 4) { arrival = parseTimeEvent(mEnd); }
-        else if (f === 5) { departure = parseTimeEvent(mEnd); }
-        else pos = mEnd;
-      } else pos = skip(buf, pos, w);
-    }
-    pos = end;
-    return { stopId, time: arrival || departure };
-  }
+  // Parse a StopTimeUpdate message, return {stopId, time}
+  function parseStopTimeUpdate(start, end) {
+    let pos = start;
+    let stopId = null;
+    let arrivalTime = null;
+    let departureTime = null;
  
-  function parseTripUpdate(end) {
-    let routeId = null; const stus = [];
     while (pos < end) {
-      const t = readVarint(buf, pos); pos = t.pos;
-      const f = t.value >> 3, w = t.value & 7;
-      if (w === 2) {
-        const l = readVarint(buf, pos); pos = l.pos;
-        const mEnd = pos + l.value;
-        if (f === 1) {
-          // trip descriptor - find route_id (field 5)
-          const tripEnd = mEnd;
-          while (pos < tripEnd) {
-            const tt = readVarint(buf, pos); pos = tt.pos;
-            const tf = tt.value >> 3, tw = tt.value & 7;
-            if (tw === 2) {
-              const tl = readVarint(buf, pos); pos = tl.pos;
-              const tEnd = pos + tl.value;
-              if (tf === 5) { const s = readString(buf, pos, tl.value); pos = s.pos; routeId = s.value; }
-              else pos = tEnd;
-            } else pos = skip(buf, pos, tw);
-          }
-          pos = tripEnd;
+      const tag = readVarint(buf, pos); pos = tag.pos;
+      if (pos >= end) break;
+      const fieldNum = tag.value >> 3;
+      const wireType = tag.value & 7;
+ 
+      if (wireType === 2) {
+        const lenV = readVarint(buf, pos); pos = lenV.pos;
+        const msgLen = lenV.value;
+        const msgEnd = pos + msgLen;
+ 
+        if (fieldNum === 3) {
+          // stop_id is a string
+          const s = readUtf8(buf, pos, msgLen);
+          if (isValidStopId(s)) stopId = s;
+          pos = msgEnd;
+        } else if (fieldNum === 4) {
+          // arrival StopTimeEvent
+          arrivalTime = parseStopTimeEvent(pos, msgEnd);
+          pos = msgEnd;
+        } else if (fieldNum === 5) {
+          // departure StopTimeEvent
+          departureTime = parseStopTimeEvent(pos, msgEnd);
+          pos = msgEnd;
+        } else {
+          pos = msgEnd;
         }
-        else if (f === 2) { stus.push(parseStopTimeUpdate(mEnd)); }
-        else pos = mEnd;
-      } else pos = skip(buf, pos, w);
+      } else if (wireType === 0) {
+        const v = readVarint(buf, pos); pos = v.pos;
+        // stop_sequence is field 1 (uint32), ignore
+      } else {
+        pos = skip(pos, wireType);
+      }
     }
-    pos = end;
+ 
+    return { stopId, time: arrivalTime || departureTime };
+  }
+ 
+  // Parse a TripDescriptor, return routeId
+  function parseTripDescriptor(start, end) {
+    let pos = start;
+    let routeId = null;
+    while (pos < end) {
+      const tag = readVarint(buf, pos); pos = tag.pos;
+      if (pos >= end) break;
+      const fieldNum = tag.value >> 3;
+      const wireType = tag.value & 7;
+      if (wireType === 2) {
+        const lenV = readVarint(buf, pos); pos = lenV.pos;
+        const msgLen = lenV.value;
+        const msgEnd = pos + msgLen;
+        if (fieldNum === 5) {
+          // route_id
+          const s = readUtf8(buf, pos, msgLen);
+          if (isValidRouteId(s)) routeId = s;
+        }
+        pos = msgEnd;
+      } else if (wireType === 0) {
+        pos = skip(pos, wireType);
+      } else {
+        pos = skip(pos, wireType);
+      }
+    }
+    return routeId;
+  }
+ 
+  // Parse a TripUpdate message
+  function parseTripUpdate(start, end) {
+    let pos = start;
+    let routeId = null;
+    const stus = [];
+ 
+    while (pos < end) {
+      const tag = readVarint(buf, pos); pos = tag.pos;
+      if (pos >= end) break;
+      const fieldNum = tag.value >> 3;
+      const wireType = tag.value & 7;
+ 
+      if (wireType === 2) {
+        const lenV = readVarint(buf, pos); pos = lenV.pos;
+        const msgLen = lenV.value;
+        const msgEnd = pos + msgLen;
+ 
+        if (fieldNum === 1) {
+          // trip (TripDescriptor)
+          routeId = parseTripDescriptor(pos, msgEnd);
+          pos = msgEnd;
+        } else if (fieldNum === 2) {
+          // stop_time_update
+          const stu = parseStopTimeUpdate(pos, msgEnd);
+          stus.push(stu);
+          pos = msgEnd;
+        } else {
+          pos = msgEnd;
+        }
+      } else if (wireType === 0) {
+        pos = skip(pos, wireType);
+      } else {
+        pos = skip(pos, wireType);
+      }
+    }
+ 
     return { routeId, stus };
   }
  
-  function parseEntity(end) {
+  // Parse a FeedEntity message
+  function parseFeedEntity(start, end) {
+    let pos = start;
     let tu = null;
+ 
     while (pos < end) {
-      const t = readVarint(buf, pos); pos = t.pos;
-      const f = t.value >> 3, w = t.value & 7;
-      if (w === 2) {
-        const l = readVarint(buf, pos); pos = l.pos;
-        const mEnd = pos + l.value;
-        if (f === 3) { tu = parseTripUpdate(mEnd); }
-        else pos = mEnd;
-      } else pos = skip(buf, pos, w);
+      const tag = readVarint(buf, pos); pos = tag.pos;
+      if (pos >= end) break;
+      const fieldNum = tag.value >> 3;
+      const wireType = tag.value & 7;
+ 
+      if (wireType === 2) {
+        const lenV = readVarint(buf, pos); pos = lenV.pos;
+        const msgLen = lenV.value;
+        const msgEnd = pos + msgLen;
+ 
+        if (fieldNum === 3) {
+          // trip_update
+          tu = parseTripUpdate(pos, msgEnd);
+          pos = msgEnd;
+        } else {
+          pos = msgEnd;
+        }
+      } else if (wireType === 0) {
+        pos = skip(pos, wireType);
+      } else {
+        pos = skip(pos, wireType);
+      }
     }
-    pos = end;
+ 
     if (tu) {
       for (const stu of tu.stus) {
         results.push({ routeId: tu.routeId, stopId: stu.stopId, time: stu.time });
@@ -138,15 +249,34 @@ function parseGtfsRt(buffer) {
     }
   }
  
+  // Parse top-level FeedMessage
+  let pos = 0;
   while (pos < buf.length) {
-    const t = readVarint(buf, pos); pos = t.pos;
-    const f = t.value >> 3, w = t.value & 7;
-    if (w === 2) {
-      const l = readVarint(buf, pos); pos = l.pos;
-      const mEnd = pos + l.value;
-      if (f === 2) { parseEntity(mEnd); }
-      else pos = mEnd;
-    } else pos = skip(buf, pos, w);
+    const tag = readVarint(buf, pos); pos = tag.pos;
+    if (pos >= buf.length) break;
+    const fieldNum = tag.value >> 3;
+    const wireType = tag.value & 7;
+ 
+    if (wireType === 2) {
+      const lenV = readVarint(buf, pos); pos = lenV.pos;
+      const msgLen = lenV.value;
+      const msgEnd = pos + msgLen;
+ 
+      if (fieldNum === 1) {
+        // header - skip
+        pos = msgEnd;
+      } else if (fieldNum === 2) {
+        // entity
+        parseFeedEntity(pos, msgEnd);
+        pos = msgEnd;
+      } else {
+        pos = msgEnd;
+      }
+    } else if (wireType === 0) {
+      pos = skip(pos, wireType);
+    } else {
+      pos = skip(pos, wireType);
+    }
   }
  
   return results;
@@ -164,32 +294,33 @@ exports.handler = async (event) => {
   try {
     const url = `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/${feedPath}`;
     const response = await fetch(url);
-    if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}`, url }) };
+    if (!response.ok) return { statusCode: response.status, headers, body: JSON.stringify({ error: `MTA returned ${response.status}` }) };
  
     const buffer = await response.arrayBuffer();
-    const allEntries = parseGtfsRt(buffer);
+    const entries = parseGtfsRt(buffer);
     const now = Math.floor(Date.now() / 1000);
     const direction = stop.endsWith('N') ? 'N' : 'S';
  
-    // DEBUG MODE — shows sample stop IDs from the feed so we can verify format
+    // Debug mode — show what stop IDs and routes we're actually parsing
     if (debug === 'true') {
-      const sampleStops = [...new Set(allEntries.map(e => e.stopId).filter(Boolean))].slice(0, 50);
-      const sampleRoutes = [...new Set(allEntries.map(e => e.routeId).filter(Boolean))];
+      const validStops = entries.filter(e => e.stopId).map(e => e.stopId);
+      const uniqueStops = [...new Set(validStops)].slice(0, 60);
+      const uniqueRoutes = [...new Set(entries.map(e => e.routeId).filter(Boolean))];
       return {
         statusCode: 200, headers,
         body: JSON.stringify({
-          totalEntries: allEntries.length,
-          sampleStopIds: sampleStops,
-          routeIds: sampleRoutes,
+          totalEntries: entries.length,
+          validStopCount: validStops.length,
+          sampleStopIds: uniqueStops,
+          routeIds: uniqueRoutes,
           requestedStop: stop,
           requestedLine: line,
-          feedUrl: url,
         })
       };
     }
  
     const arrivals = [];
-    for (const entry of allEntries) {
+    for (const entry of entries) {
       if (entry.stopId !== stop) continue;
       if (!entry.time) continue;
       const diffSec = entry.time - now;
@@ -203,7 +334,10 @@ exports.handler = async (event) => {
     }
  
     arrivals.sort((a, b) => a.mins - b.mins);
-    return { statusCode: 200, headers, body: JSON.stringify({ arrivals: arrivals.slice(0, 6), stop, line, direction, total: allEntries.length }) };
+    return {
+      statusCode: 200, headers,
+      body: JSON.stringify({ arrivals: arrivals.slice(0, 6), stop, line, direction, total: entries.length })
+    };
  
   } catch (err) {
     return { statusCode: 500, headers, body: JSON.stringify({ error: err.message, stack: err.stack }) };
